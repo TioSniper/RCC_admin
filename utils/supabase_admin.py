@@ -611,3 +611,223 @@ def listar_logs(limite: int = 200) -> list:
     except Exception as e:
         print(f"Erro ao listar logs: {e}")
         return []
+
+
+# ═══════════════════════════════════════════════════════════════
+# SOLICITAÇÕES DE CADASTRO
+# ═══════════════════════════════════════════════════════════════
+
+
+def listar_solicitacoes() -> list:
+    try:
+        r = (
+            _cliente()
+            .table("solicitacoes")
+            .select("id, username, criado_em")
+            .eq("status", "pendente")
+            .order("criado_em")
+            .execute()
+        )
+        return r.data
+    except Exception as e:
+        print(f"Erro ao listar solicitações: {e}")
+        return []
+
+
+def aprovar_solicitacao(sol_id: str, username: str, dias: int) -> tuple[bool, str]:
+    try:
+        # Cria o usuário no Supabase Auth
+        email = f"{username}@rcc.app"
+        # Busca a senha_hash da solicitação para usar como senha temporária
+        sol = (
+            _cliente()
+            .table("solicitacoes")
+            .select("senha_hash")
+            .eq("id", sol_id)
+            .execute()
+        )
+        if not sol.data:
+            return False, "Solicitação não encontrada."
+
+        senha_temp = sol.data[0]["senha_hash"][
+            :16
+        ]  # primeiros 16 chars do hash como senha temp
+
+        response = _cliente().auth.admin.create_user(
+            {
+                "email": email,
+                "password": senha_temp,
+                "email_confirm": True,
+            }
+        )
+        user_id = response.user.id
+
+        # Atualiza username no perfil
+        _cliente().table("perfis").update({"username": username}).eq(
+            "id", user_id
+        ).execute()
+
+        # Cria assinatura com plano mvp_timer
+        planos = (
+            _cliente().table("planos").select("id").eq("nome", "mvp_timer").execute()
+        )
+        if planos.data:
+            plano_id = planos.data[0]["id"]
+            _cliente().rpc(
+                "criar_assinatura_admin",
+                {
+                    "p_user_id": user_id,
+                    "p_plano_id": plano_id,
+                    "p_dias": dias,
+                },
+            ).execute()
+
+        # Atualiza status da solicitação para aprovado
+        _cliente().table("solicitacoes").update(
+            {
+                "status": "aprovado",
+                "atualizado": "now()",
+            }
+        ).eq("id", sol_id).execute()
+
+        _logs.registrar(
+            "aprovar_solicitacao", user_id, {"username": username, "dias": dias}
+        )
+        _cache.invalidar("usuarios")
+
+        return True, "Usuário aprovado com sucesso."
+    except Exception as e:
+        return False, f"Erro: {e}"
+
+
+def rejeitar_solicitacao(sol_id: str) -> tuple[bool, str]:
+    try:
+        _cliente().table("solicitacoes").update(
+            {
+                "status": "rejeitado",
+                "atualizado": "now()",
+            }
+        ).eq("id", sol_id).execute()
+        _logs.registrar("rejeitar_solicitacao", detalhes={"sol_id": sol_id})
+        return True, "Solicitação rejeitada."
+    except Exception as e:
+        return False, f"Erro: {e}"
+
+
+# ═══════════════════════════════════════════════════════════════
+# SOLICITAÇÕES DE CADASTRO
+# Adicione estas funções no final do utils/supabase_admin.py
+# ═══════════════════════════════════════════════════════════════
+
+
+def listar_solicitacoes() -> list:
+    """Lista solicitações pendentes de cadastro."""
+    try:
+        r = (
+            _cliente()
+            .table("solicitacoes")
+            .select("id, username, criado_em")
+            .eq("status", "pendente")
+            .order("criado_em")
+            .execute()
+        )
+        return r.data
+    except Exception as e:
+        print(f"Erro ao listar solicitações: {e}")
+        return []
+
+
+def aprovar_solicitacao(sol_id: str, username: str, dias: int) -> tuple[bool, str]:
+    """
+    Aprova uma solicitação:
+    1. Lê a senha_real da solicitação (só service_role tem acesso)
+    2. Cria o usuário no Supabase Auth com a senha escolhida pelo cliente
+    3. Cria assinatura com plano mvp_timer
+    4. Marca solicitação como aprovada
+    """
+    try:
+        # Busca senha real (só acessível via service_role)
+        sol = (
+            _cliente()
+            .table("solicitacoes")
+            .select("senha_real")
+            .eq("id", sol_id)
+            .execute()
+        )
+
+        if not sol.data:
+            return False, "Solicitação não encontrada."
+
+        senha_real = sol.data[0].get("senha_real")
+        if not senha_real:
+            return False, "Dados da solicitação incompletos."
+
+        email = f"{username}@rcc.app"
+
+        # Cria usuário no Auth com a senha original do cliente
+        response = _cliente().auth.admin.create_user(
+            {
+                "email": email,
+                "password": senha_real,
+                "email_confirm": True,
+            }
+        )
+        user_id = response.user.id
+
+        # Atualiza username no perfil
+        _cliente().table("perfis").update({"username": username}).eq(
+            "id", user_id
+        ).execute()
+
+        # Busca plano mvp_timer
+        planos = (
+            _cliente().table("planos").select("id").eq("nome", "mvp_timer").execute()
+        )
+
+        if planos.data:
+            plano_id = planos.data[0]["id"]
+            _cliente().rpc(
+                "criar_assinatura_admin",
+                {
+                    "p_user_id": user_id,
+                    "p_plano_id": plano_id,
+                    "p_dias": dias,
+                },
+            ).execute()
+
+        # Marca solicitação como aprovada e apaga senha_real por segurança
+        _cliente().table("solicitacoes").update(
+            {
+                "status": "aprovado",
+                "senha_real": None,  # remove a senha após uso
+                "atualizado": datetime.now(timezone.utc).isoformat(),
+            }
+        ).eq("id", sol_id).execute()
+
+        _logs.registrar(
+            "aprovar_solicitacao", user_id, {"username": username, "dias": dias}
+        )
+        _cache.invalidar("usuarios")
+
+        return True, f"Usuário '{username}' aprovado com sucesso."
+
+    except Exception as e:
+        print(f"Erro ao aprovar solicitação: {e}")
+        return False, f"Erro: {e}"
+
+
+def rejeitar_solicitacao(sol_id: str) -> tuple[bool, str]:
+    """Rejeita uma solicitação e remove dados sensíveis."""
+    try:
+        _cliente().table("solicitacoes").update(
+            {
+                "status": "rejeitado",
+                "senha_real": None,  # remove senha por segurança
+                "atualizado": datetime.now(timezone.utc).isoformat(),
+            }
+        ).eq("id", sol_id).execute()
+
+        _logs.registrar("rejeitar_solicitacao", detalhes={"sol_id": sol_id})
+        return True, "Solicitação rejeitada."
+    except Exception as e:
+        return False, f"Erro: {e}"
