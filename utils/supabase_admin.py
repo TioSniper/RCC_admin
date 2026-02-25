@@ -61,52 +61,13 @@ _logs = GerenciadorLogs()
 
 
 # ═══════════════════════════════════════════════════════════════
-# CACHE
-# ═══════════════════════════════════════════════════════════════
-
-
-class Cache:
-    def __init__(self, ttl: int = 60):
-        self._dados = {}
-        self._ts = {}
-        self._ttl = ttl
-
-    def get(self, chave: str):
-        if chave not in self._dados:
-            return None
-        if time.time() - self._ts[chave] > self._ttl:
-            del self._dados[chave]
-            return None
-        return self._dados[chave]
-
-    def set(self, chave: str, valor):
-        self._dados[chave] = valor
-        self._ts[chave] = time.time()
-
-    def invalidar(self, chave: str = None):
-        if chave:
-            self._dados.pop(chave, None)
-            self._ts.pop(chave, None)
-        else:
-            self._dados.clear()
-            self._ts.clear()
-
-
-_cache = Cache(ttl=60)
-
-
-# ═══════════════════════════════════════════════════════════════
 # MÓDULOS
 # ═══════════════════════════════════════════════════════════════
 
 
 def listar_modulos() -> list:
-    cached = _cache.get("modulos")
-    if cached:
-        return cached
     try:
         r = _cliente().table("modulos").select("*").order("nome").execute()
-        _cache.set("modulos", r.data)
         return r.data
     except Exception as e:
         print(f"Erro ao listar módulos: {e}")
@@ -123,7 +84,6 @@ def criar_modulo(id_modulo: str, nome: str, descricao: str = "") -> tuple[bool, 
                 "ativo": True,
             }
         ).execute()
-        _cache.invalidar("modulos")
         _logs.registrar("criar_modulo", detalhes={"modulo": id_modulo})
         return True, "Módulo criado."
     except Exception as e:
@@ -135,7 +95,6 @@ def editar_modulo(id_modulo: str, nome: str, descricao: str) -> tuple[bool, str]
         _cliente().table("modulos").update({"nome": nome, "descricao": descricao}).eq(
             "id", id_modulo
         ).execute()
-        _cache.invalidar("modulos")
         _logs.registrar("editar_modulo", detalhes={"modulo": id_modulo})
         return True, "Módulo atualizado."
     except Exception as e:
@@ -147,7 +106,6 @@ def ativar_modulo(id_modulo: str, ativo: bool) -> tuple[bool, str]:
         _cliente().table("modulos").update({"ativo": ativo}).eq(
             "id", id_modulo
         ).execute()
-        _cache.invalidar("modulos")
         _logs.registrar(
             "ativar_modulo" if ativo else "desativar_modulo",
             detalhes={"modulo": id_modulo},
@@ -163,9 +121,6 @@ def ativar_modulo(id_modulo: str, ativo: bool) -> tuple[bool, str]:
 
 
 def listar_planos() -> list:
-    cached = _cache.get("planos")
-    if cached:
-        return cached
     try:
         r = (
             _cliente()
@@ -174,7 +129,6 @@ def listar_planos() -> list:
             .order("nome")
             .execute()
         )
-        _cache.set("planos", r.data)
         return r.data
     except Exception as e:
         print(f"Erro ao listar planos: {e}")
@@ -194,7 +148,6 @@ def criar_plano(nome: str, descricao: str, modulos: list) -> tuple[bool, str]:
             _cliente().table("planos_modulos").insert(
                 [{"plano_id": plano_id, "modulo_id": m} for m in modulos]
             ).execute()
-        _cache.invalidar("planos")
         _logs.registrar("criar_plano", detalhes={"nome": nome})
         return True, "Plano criado."
     except Exception as e:
@@ -206,7 +159,6 @@ def editar_plano(plano_id: str, nome: str, descricao: str) -> tuple[bool, str]:
         _cliente().table("planos").update({"nome": nome, "descricao": descricao}).eq(
             "id", plano_id
         ).execute()
-        _cache.invalidar("planos")
         _logs.registrar("editar_plano", detalhes={"plano_id": plano_id})
         return True, "Plano atualizado."
     except Exception as e:
@@ -218,7 +170,6 @@ def adicionar_modulo_plano(plano_id: str, modulo_id: str) -> tuple[bool, str]:
         _cliente().table("planos_modulos").insert(
             {"plano_id": plano_id, "modulo_id": modulo_id}
         ).execute()
-        _cache.invalidar("planos")
         return True, "Módulo adicionado."
     except Exception as e:
         return False, f"Erro: {e}"
@@ -229,7 +180,6 @@ def remover_modulo_plano(plano_id: str, modulo_id: str) -> tuple[bool, str]:
         _cliente().table("planos_modulos").delete().eq("plano_id", plano_id).eq(
             "modulo_id", modulo_id
         ).execute()
-        _cache.invalidar("planos")
         return True, "Módulo removido."
     except Exception as e:
         return False, f"Erro: {e}"
@@ -238,10 +188,19 @@ def remover_modulo_plano(plano_id: str, modulo_id: str) -> tuple[bool, str]:
 def ativar_plano(plano_id: str, ativo: bool) -> tuple[bool, str]:
     try:
         _cliente().table("planos").update({"ativo": ativo}).eq("id", plano_id).execute()
-        _cache.invalidar("planos")
         return True, "Plano atualizado."
     except Exception as e:
         return False, f"Erro: {e}"
+
+
+def excluir_plano(plano_id: str):
+    try:
+        _cliente().table("planos").delete().eq("id", plano_id).execute()
+
+        return True
+    except Exception as e:
+        print("Erro ao excluir plano:", e)
+        return False
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -250,9 +209,6 @@ def ativar_plano(plano_id: str, ativo: bool) -> tuple[bool, str]:
 
 
 def listar_usuarios() -> list:
-    cached = _cache.get("usuarios")
-    if cached:
-        return cached
     try:
         perfis = (
             _cliente()
@@ -275,7 +231,6 @@ def listar_usuarios() -> list:
             )
             p["assinatura"] = ass.data[0] if ass.data else None
             usuarios.append(p)
-        _cache.set("usuarios", usuarios)
         return usuarios
     except Exception as e:
         print(f"Erro ao listar usuários: {e}")
@@ -296,7 +251,6 @@ def criar_usuario(username: str, senha: str) -> tuple[bool, str]:
         _cliente().table("perfis").update({"username": username.lower().strip()}).eq(
             "id", user_id
         ).execute()
-        _cache.invalidar("usuarios")
         _logs.registrar("criar_usuario", user_id, {"username": username})
         return True, user_id
     except Exception as e:
@@ -311,7 +265,6 @@ def editar_username(user_id: str, novo_username: str) -> tuple[bool, str]:
         _cliente().table("perfis").update(
             {"username": novo_username.lower().strip()}
         ).eq("id", user_id).execute()
-        _cache.invalidar("usuarios")
         _logs.registrar("editar_username", user_id)
         return True, "Username atualizado."
     except Exception as e:
@@ -321,7 +274,6 @@ def editar_username(user_id: str, novo_username: str) -> tuple[bool, str]:
 def ativar_usuario(user_id: str) -> tuple[bool, str]:
     try:
         _cliente().table("perfis").update({"ativo": True}).eq("id", user_id).execute()
-        _cache.invalidar("usuarios")
         _logs.registrar("ativar_usuario", user_id)
         return True, "Usuário ativado."
     except Exception as e:
@@ -331,7 +283,6 @@ def ativar_usuario(user_id: str) -> tuple[bool, str]:
 def desativar_usuario(user_id: str) -> tuple[bool, str]:
     try:
         _cliente().table("perfis").update({"ativo": False}).eq("id", user_id).execute()
-        _cache.invalidar("usuarios")
         _logs.registrar("desativar_usuario", user_id)
         return True, "Usuário desativado."
     except Exception as e:
@@ -349,8 +300,13 @@ def resetar_senha(user_id: str, nova_senha: str) -> tuple[bool, str]:
 
 def deletar_usuario(user_id: str) -> tuple[bool, str]:
     try:
+        perfil = (
+            _cliente().table("perfis").select("username").eq("id", user_id).execute()
+        )
+        username = perfil.data[0].get("username") if perfil.data else None
+        if username:
+            _cliente().table("solicitacoes").delete().eq("username", username).execute()
         _cliente().auth.admin.delete_user(user_id)
-        _cache.invalidar("usuarios")
         _logs.registrar("deletar_usuario", user_id)
         return True, "Usuário deletado."
     except Exception as e:
@@ -358,14 +314,11 @@ def deletar_usuario(user_id: str) -> tuple[bool, str]:
 
 
 # ═══════════════════════════════════════════════════════════════
-# ASSINATURAS — usa v_assinaturas
+# ASSINATURAS
 # ═══════════════════════════════════════════════════════════════
 
 
 def listar_assinaturas() -> list:
-    cached = _cache.get("assinaturas")
-    if cached:
-        return cached
     try:
         r = (
             _cliente()
@@ -375,7 +328,6 @@ def listar_assinaturas() -> list:
             .order("expira_em")
             .execute()
         )
-        _cache.set("assinaturas", r.data)
         return r.data
     except Exception as e:
         print(f"Erro ao listar assinaturas: {e}")
@@ -411,8 +363,6 @@ def criar_assinatura(user_id: str, plano_id: str, dias: int) -> tuple[bool, str]
                 "p_dias": dias,
             },
         ).execute()
-        _cache.invalidar("assinaturas")
-        _cache.invalidar("usuarios")
         _logs.registrar(
             "criar_assinatura", user_id, {"plano_id": plano_id, "dias": dias}
         )
@@ -430,8 +380,6 @@ def renovar_assinatura(user_id: str, dias: int) -> tuple[bool, str]:
                 "p_dias": dias,
             },
         ).execute()
-        _cache.invalidar("assinaturas")
-        _cache.invalidar("usuarios")
         _logs.registrar("renovar_assinatura", user_id, {"dias": dias})
         return True, f"Renovada por mais {dias} dias."
     except Exception as e:
@@ -443,8 +391,6 @@ def revogar_assinatura(user_id: str) -> tuple[bool, str]:
         _cliente().table("assinaturas").update({"ativo": False}).eq(
             "user_id", user_id
         ).eq("ativo", True).execute()
-        _cache.invalidar("assinaturas")
-        _cache.invalidar("usuarios")
         _logs.registrar("revogar_assinatura", user_id)
         return True, "Assinatura revogada."
     except Exception as e:
@@ -454,10 +400,11 @@ def revogar_assinatura(user_id: str) -> tuple[bool, str]:
 def mudar_plano(user_id: str, novo_plano_id: str) -> tuple[bool, str]:
     try:
         _cliente().table("assinaturas").update(
-            {"plano_id": novo_plano_id, "renovado_em": "now()"}
+            {
+                "plano_id": novo_plano_id,
+                "renovado_em": "now()",
+            }
         ).eq("user_id", user_id).eq("ativo", True).execute()
-        _cache.invalidar("assinaturas")
-        _cache.invalidar("usuarios")
         _logs.registrar("mudar_plano", user_id, {"novo_plano_id": novo_plano_id})
         return True, "Plano alterado."
     except Exception as e:
@@ -465,7 +412,7 @@ def mudar_plano(user_id: str, novo_plano_id: str) -> tuple[bool, str]:
 
 
 # ═══════════════════════════════════════════════════════════════
-# ACESSOS EXTRAS — usa v_acessos_extras
+# ACESSOS EXTRAS
 # ═══════════════════════════════════════════════════════════════
 
 
@@ -516,7 +463,7 @@ def revogar_acesso_extra(acesso_id: str, user_id: str) -> tuple[bool, str]:
 
 
 # ═══════════════════════════════════════════════════════════════
-# RELATÓRIOS
+# RELATÓRIOS / DASHBOARD
 # ═══════════════════════════════════════════════════════════════
 
 
@@ -538,8 +485,7 @@ def resumo_geral() -> dict:
             .execute()
             .data
         )
-
-        expirando = (
+        expirando = len(
             _cliente()
             .table("assinaturas")
             .select("id")
@@ -547,23 +493,24 @@ def resumo_geral() -> dict:
             .lte("expira_em", em_7_dias)
             .gte("expira_em", agora_iso)
             .execute()
+            .data
         )
-
-        expiradas = (
+        expiradas = len(
             _cliente()
             .table("assinaturas")
             .select("id")
             .eq("ativo", True)
             .lt("expira_em", agora_iso)
             .execute()
+            .data
         )
 
         return {
             "total_usuarios": total,
             "usuarios_ativos": ativos,
             "assinaturas_ativas": ass_ativas,
-            "expirando_7_dias": len(expirando.data),
-            "expiradas": len(expiradas.data),
+            "expirando_7_dias": expirando,
+            "expiradas": expiradas,
         }
     except Exception as e:
         print(f"Erro resumo: {e}")
@@ -575,7 +522,6 @@ def listar_expirando(dias: int = 7) -> list:
         agora = datetime.now(timezone.utc)
         em_x_dias = (agora + timedelta(days=dias)).isoformat()
         agora_iso = agora.isoformat()
-
         r = (
             _cliente()
             .table("v_assinaturas")
@@ -593,7 +539,7 @@ def listar_expirando(dias: int = 7) -> list:
 
 
 # ═══════════════════════════════════════════════════════════════
-# LOGS — usa v_logs_admin
+# LOGS
 # ═══════════════════════════════════════════════════════════════
 
 
@@ -615,12 +561,10 @@ def listar_logs(limite: int = 200) -> list:
 
 # ═══════════════════════════════════════════════════════════════
 # SOLICITAÇÕES DE CADASTRO
-# Adicione estas funções no final do utils/supabase_admin.py
 # ═══════════════════════════════════════════════════════════════
 
 
 def listar_solicitacoes() -> list:
-    """Lista solicitações pendentes de cadastro."""
     try:
         r = (
             _cliente()
@@ -637,15 +581,7 @@ def listar_solicitacoes() -> list:
 
 
 def aprovar_solicitacao(sol_id: str, username: str, dias: int) -> tuple[bool, str]:
-    """
-    Aprova uma solicitação:
-    1. Lê a senha_real da solicitação (só service_role tem acesso)
-    2. Cria o usuário no Supabase Auth com a senha escolhida pelo cliente
-    3. Cria assinatura com plano mvp_timer
-    4. Marca solicitação como aprovada
-    """
     try:
-        # Busca senha real (só acessível via service_role)
         sol = (
             _cliente()
             .table("solicitacoes")
@@ -653,50 +589,40 @@ def aprovar_solicitacao(sol_id: str, username: str, dias: int) -> tuple[bool, st
             .eq("id", sol_id)
             .execute()
         )
-
         if not sol.data:
             return False, "Solicitação não encontrada."
-
         senha_real = sol.data[0].get("senha_real")
         if not senha_real:
             return False, "Dados da solicitação incompletos."
 
-        email = f"{username}@rcc.app"
-
-        # Cria usuário no Auth com a senha original do cliente
         response = _cliente().auth.admin.create_user(
             {
-                "email": email,
+                "email": f"{username}@rcc.app",
                 "password": senha_real,
                 "email_confirm": True,
             }
         )
         user_id = response.user.id
 
-        # Atualiza username no perfil
         _cliente().table("perfis").update({"username": username}).eq(
             "id", user_id
         ).execute()
 
-        # Busca plano mvp_timer
         planos = _cliente().table("planos").select("id").eq("nome", "Basico").execute()
-
         if planos.data:
-            plano_id = planos.data[0]["id"]
             _cliente().rpc(
                 "criar_assinatura_admin",
                 {
                     "p_user_id": user_id,
-                    "p_plano_id": plano_id,
+                    "p_plano_id": planos.data[0]["id"],
                     "p_dias": dias,
                 },
             ).execute()
 
-        # Marca solicitação como aprovada e apaga senha_real por segurança
         _cliente().table("solicitacoes").update(
             {
                 "status": "aprovado",
-                "senha_real": None,  # remove a senha após uso
+                "senha_real": None,
                 "atualizado": datetime.now(timezone.utc).isoformat(),
             }
         ).eq("id", sol_id).execute()
@@ -704,26 +630,23 @@ def aprovar_solicitacao(sol_id: str, username: str, dias: int) -> tuple[bool, st
         _logs.registrar(
             "aprovar_solicitacao", user_id, {"username": username, "dias": dias}
         )
-        _cache.invalidar("usuarios")
-
         return True, f"Usuário '{username}' aprovado com sucesso."
-
     except Exception as e:
-        print(f"Erro ao aprovar solicitação: {e}")
+        import traceback
+
+        traceback.print_exc()
         return False, f"Erro: {e}"
 
 
 def rejeitar_solicitacao(sol_id: str) -> tuple[bool, str]:
-    """Rejeita uma solicitação e remove dados sensíveis."""
     try:
         _cliente().table("solicitacoes").update(
             {
                 "status": "rejeitado",
-                "senha_real": None,  # remove senha por segurança
+                "senha_real": None,
                 "atualizado": datetime.now(timezone.utc).isoformat(),
             }
         ).eq("id", sol_id).execute()
-
         _logs.registrar("rejeitar_solicitacao", detalhes={"sol_id": sol_id})
         return True, "Solicitação rejeitada."
     except Exception as e:

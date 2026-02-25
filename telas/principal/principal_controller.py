@@ -21,31 +21,35 @@ from telas.logs.logs_controller import LogsController
 
 class PrincipalController:
 
-    def __init__(self, ui):
+    def __init__(self, ui, realtime=None):
         self.ui = ui
+        self._realtime = realtime
         self._paginas = {}
         self._carregar_paginas()
         self._conectar_eventos()
         self._ir_para("dashboard")
 
     def _carregar_paginas(self):
+        rt = self._realtime
+
+        # Telas que usam Realtime recebem rt, as outras recebem None
         paginas = {
-            "dashboard": (DashboardUI, DashboardController),
-            "usuarios": (UsuariosUI, UsuariosController),
-            "assinaturas": (AssinaturasUI, AssinaturasController),
-            "planos": (PlanosUI, PlanosController),
-            "modulos": (ModulosUI, ModulosController),
-            "acessos": (AcessosUI, AcessosController),
-            "relatorios": (RelatoriosUI, RelatoriosController),
-            "logs": (LogsUI, LogsController),
+            "dashboard": (DashboardUI, lambda ui: DashboardController(ui, rt)),
+            "usuarios": (UsuariosUI, lambda ui: UsuariosController(ui, rt)),
+            "assinaturas": (AssinaturasUI, lambda ui: AssinaturasController(ui, rt)),
+            "planos": (PlanosUI, lambda ui: PlanosController(ui, rt)),
+            "modulos": (ModulosUI, lambda ui: ModulosController(ui, rt)),
+            "acessos": (AcessosUI, lambda ui: AcessosController(ui, rt)),
+            "relatorios": (RelatoriosUI, lambda ui: RelatoriosController(ui)),
+            "logs": (LogsUI, lambda ui: LogsController(ui, rt)),
         }
 
-        self._controllers = {}  # guarda referências para não serem destruídos
+        self._controllers = {}
 
-        for id_pagina, (UIClass, ControllerClass) in paginas.items():
+        for id_pagina, (UIClass, factory) in paginas.items():
             pagina_ui = UIClass()
-            controller = ControllerClass(pagina_ui)
-            self._controllers[id_pagina] = controller  # mantém vivo
+            controller = factory(pagina_ui)
+            self._controllers[id_pagina] = controller
             self.ui.area_conteudo.addWidget(pagina_ui)
             self._paginas[id_pagina] = pagina_ui
 
@@ -59,15 +63,12 @@ class PrincipalController:
             btn.clicked.connect(lambda checked, p=id_pagina: self._ir_para(p))
 
     def _ir_para(self, id_pagina: str):
-        # Desmarca todos os botões
         for btn in self.ui.btns_menu.values():
             btn.setChecked(False)
 
-        # Marca o botão ativo
         if id_pagina in self.ui.btns_menu:
             self.ui.btns_menu[id_pagina].setChecked(True)
 
-        # Muda a página
         if id_pagina in self._paginas:
             self.ui.area_conteudo.setCurrentWidget(self._paginas[id_pagina])
 
@@ -79,7 +80,6 @@ class PrincipalController:
             self.ui.btn_toggle_menu.setText("▶")
             for btn in self.ui.btns_menu.values():
                 texto = btn.text().strip()
-                # Mantém só o emoji
                 partes = texto.split("  ")
                 if len(partes) >= 2:
                     btn.setText(f"  {partes[1]}")
@@ -104,5 +104,7 @@ class PrincipalController:
     def _fechar(self):
         from utils.supabase_admin import _logs
 
+        if self._realtime:
+            self._realtime.parar()
         _logs.forcar_salvar()
         QApplication.quit()

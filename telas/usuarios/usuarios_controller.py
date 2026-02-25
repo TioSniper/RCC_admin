@@ -1,17 +1,24 @@
-# ═══════════════════════════════════════════════════════════════
-# usuarios_controller.py
-# ═══════════════════════════════════════════════════════════════
 import threading
 from datetime import datetime, timezone
 from PyQt6.QtWidgets import (
-    QTableWidgetItem, QWidget, QHBoxLayout,
-    QPushButton, QLabel, QLineEdit, QComboBox
+    QTableWidgetItem,
+    QWidget,
+    QHBoxLayout,
+    QPushButton,
+    QLabel,
+    QLineEdit,
+    QComboBox,
 )
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
 from utils.supabase_admin import (
-    listar_usuarios, criar_usuario, ativar_usuario,
-    desativar_usuario, resetar_senha, deletar_usuario,
-    listar_planos, criar_assinatura
+    listar_usuarios,
+    criar_usuario,
+    ativar_usuario,
+    desativar_usuario,
+    resetar_senha,
+    deletar_usuario,
+    listar_planos,
+    criar_assinatura,
 )
 
 
@@ -27,11 +34,16 @@ class UsuariosWorker(QObject):
 
 class UsuariosController:
 
-    def __init__(self, ui):
-        self.ui     = ui
+    def __init__(self, ui, realtime=None):
+        self.ui = ui
         self._todos = []
         self.worker = UsuariosWorker()
         self.worker.dados_prontos.connect(self._preencher_tabela)
+
+        if realtime:
+            realtime.usuarios_mudou.connect(self._carregar)
+            realtime.assinaturas_mudou.connect(self._carregar)
+
         self._conectar_eventos()
         self._carregar()
 
@@ -48,7 +60,8 @@ class UsuariosController:
             self._preencher_tabela(self._todos)
             return
         filtrados = [
-            u for u in self._todos
+            u
+            for u in self._todos
             if texto.lower() in (u.get("username") or "").lower()
             or texto.lower() in (u.get("email") or "").lower()
         ]
@@ -64,29 +77,33 @@ class UsuariosController:
             tabela.insertRow(row)
 
             username = u.get("username") or "—"
-            email    = u.get("email", "—")
-            ativo    = u.get("ativo", False)
-            ass      = u.get("assinatura") or {}
-            plano    = (ass.get("plano_nome") or "Sem plano")
-            expira   = "—"
+            email = u.get("email", "—")
+            ativo = u.get("ativo", False)
+            ass = u.get("assinatura") or {}
+            plano = ass.get("plano_nome") or "Sem plano"
+            expira = "—"
+            cadastro = "—"
 
             if ass.get("expira_em"):
                 try:
-                    dt     = datetime.fromisoformat(ass["expira_em"].replace("Z", "+00:00"))
+                    dt = datetime.fromisoformat(ass["expira_em"].replace("Z", "+00:00"))
                     expira = dt.strftime("%d/%m/%Y")
                 except Exception:
                     pass
+            elif ass.get("plano_nome"):
+                expira = "Sem expiração"
 
-            cadastro = "—"
             if u.get("criado_em"):
                 try:
-                    dt       = datetime.fromisoformat(u["criado_em"].replace("Z", "+00:00"))
+                    dt = datetime.fromisoformat(u["criado_em"].replace("Z", "+00:00"))
                     cadastro = dt.strftime("%d/%m/%Y")
                 except Exception:
                     pass
 
             status_item = QTableWidgetItem("✅ Ativo" if ativo else "❌ Inativo")
-            status_item.setForeground(Qt.GlobalColor.green if ativo else Qt.GlobalColor.red)
+            status_item.setForeground(
+                Qt.GlobalColor.green if ativo else Qt.GlobalColor.red
+            )
             status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
             tabela.setItem(row, 0, self._item(username))
@@ -105,19 +122,22 @@ class UsuariosController:
                 b = QPushButton(txt)
                 b.setFixedHeight(26)
                 b.setCursor(Qt.CursorShape.PointingHandCursor)
-                b.setStyleSheet(f"""
+                b.setStyleSheet(
+                    f"""
                     QPushButton {{
                         background-color: {cor}; color: white;
                         border-radius: 5px; font-size: 11px;
                         border: none; padding: 0 8px;
                     }}
-                """)
+                """
+                )
                 return b
 
-            btn_toggle = _btn("Desativar" if ativo else "Ativar",
-                              "#dc2626" if ativo else "#16a34a")
-            btn_senha  = _btn("Senha", "#2563eb")
-            btn_del    = _btn("🗑", "#7f1d1d")
+            btn_toggle = _btn(
+                "Desativar" if ativo else "Ativar", "#dc2626" if ativo else "#16a34a"
+            )
+            btn_senha = _btn("Senha", "#2563eb")
+            btn_del = _btn("🗑", "#7f1d1d")
 
             user_id = u["id"]
             btn_toggle.clicked.connect(
@@ -139,14 +159,18 @@ class UsuariosController:
             tabela.setRowHeight(row, 40)
 
     def _toggle_usuario(self, user_id: str, ativo: bool):
-        if ativo:
-            desativar_usuario(user_id)
-        else:
-            ativar_usuario(user_id)
-        self._carregar()
+        def _run():
+            if ativo:
+                desativar_usuario(user_id)
+            else:
+                ativar_usuario(user_id)
+            self._carregar()
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def _dialog_resetar_senha(self, user_id: str):
         from telas.dialogs import DialogBase
+
         dialog = DialogBase("🔑  Resetar Senha", parent=self.ui)
         lbl = QLabel("Nova senha:")
         lbl.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
@@ -155,32 +179,43 @@ class UsuariosController:
         inp.setPlaceholderText("••••••••")
         inp.setFixedHeight(36)
         inp.setStyleSheet(dialog._estilo_input())
+        lbl_aviso = QLabel("")
+        lbl_aviso.setStyleSheet("color: #ff5c5c; font-size: 11px;")
         dialog._layout_corpo.insertWidget(0, lbl)
         dialog._layout_corpo.insertWidget(1, inp)
+        dialog._layout_corpo.insertWidget(2, lbl_aviso)
 
         def _salvar():
             nova = inp.text().strip()
             if len(nova) < 6:
+                lbl_aviso.setText("⚠️  Mínimo 6 caracteres.")
                 return
             ok, _ = resetar_senha(user_id, nova)
             if ok:
                 dialog.accept()
+            else:
+                lbl_aviso.setText("⚠️  Erro ao resetar senha.")
 
         dialog._btn_confirmar.clicked.connect(_salvar)
         dialog.exec()
 
     def _confirmar_deletar(self, user_id: str, username: str):
         from telas.dialogs import DialogConfirmacao
-        dialog = DialogConfirmacao(
+
+        if DialogConfirmacao(
             f"Deseja deletar o usuário '{username}'?\nEsta ação não pode ser desfeita.",
-            parent=self.ui
-        )
-        if dialog.exec():
-            deletar_usuario(user_id)
-            self._carregar()
+            parent=self.ui,
+        ).exec():
+
+            def _run():
+                deletar_usuario(user_id)
+                self._carregar()
+
+            threading.Thread(target=_run, daemon=True).start()
 
     def _dialog_novo_usuario(self):
         from telas.dialogs import DialogBase
+
         dialog = DialogBase("➕  Novo Usuário", parent=self.ui)
 
         def _campo(label_txt, placeholder, idx, senha=False):
@@ -192,18 +227,19 @@ class UsuariosController:
             inp.setStyleSheet(dialog._estilo_input())
             if senha:
                 inp.setEchoMode(QLineEdit.EchoMode.Password)
-            dialog._layout_corpo.insertWidget(idx * 2,     lbl)
+            dialog._layout_corpo.insertWidget(idx * 2, lbl)
             dialog._layout_corpo.insertWidget(idx * 2 + 1, inp)
             return inp
 
-        inp_user  = _campo("Username:", "tiosniper", 0)
-        inp_senha = _campo("Senha:",    "••••••••",  1, senha=True)
+        inp_user = _campo("Username:", "ex: joaosilva", 0)
+        inp_senha = _campo("Senha:", "••••••••", 1, senha=True)
 
         lbl_plano = QLabel("Plano inicial:")
         lbl_plano.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
         combo_plano = QComboBox()
         combo_plano.setFixedHeight(36)
-        combo_plano.setStyleSheet("""
+        combo_plano.setStyleSheet(
+            """
             QComboBox {
                 background-color: rgba(255,255,255,0.05);
                 border: 1px solid #2a3f7a; border-radius: 8px;
@@ -214,28 +250,38 @@ class UsuariosController:
                 background-color: #1a2854; color: white;
                 border: 1px solid #FFD700;
             }
-        """)
+        """
+        )
         combo_plano.addItem("Sem plano", None)
         for p in listar_planos():
             combo_plano.addItem(p["nome"], p["id"])
 
-        inp_dias = _campo("Dias de acesso:", "30", 3)
+        lbl_dias = QLabel("Dias de acesso (0 = sem expiração):")
+        lbl_dias.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
+        inp_dias = QLineEdit("0")
+        inp_dias.setFixedHeight(36)
+        inp_dias.setStyleSheet(dialog._estilo_input())
 
         dialog._layout_corpo.insertWidget(4, lbl_plano)
         dialog._layout_corpo.insertWidget(5, combo_plano)
+        dialog._layout_corpo.insertWidget(6, lbl_dias)
+        dialog._layout_corpo.insertWidget(7, inp_dias)
 
         lbl_aviso = QLabel("")
         lbl_aviso.setStyleSheet("color: #ff5c5c; font-size: 11px;")
-        dialog._layout_corpo.insertWidget(6, lbl_aviso)
+        dialog._layout_corpo.insertWidget(8, lbl_aviso)
 
         def _salvar():
             username = inp_user.text().strip()
-            senha    = inp_senha.text().strip()
+            senha = inp_senha.text().strip()
             plano_id = combo_plano.currentData()
             try:
-                dias = int(inp_dias.text().strip() or "30")
+                dias = int(inp_dias.text().strip() or "0")
+                if dias < 0:
+                    raise ValueError
             except ValueError:
-                dias = 30
+                lbl_aviso.setText("⚠️  Dias inválido.")
+                return
 
             if not username or not senha:
                 lbl_aviso.setText("⚠️  Preencha username e senha.")

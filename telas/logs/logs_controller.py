@@ -18,11 +18,15 @@ class LogsWorker(QObject):
 
 class LogsController:
 
-    def __init__(self, ui):
-        self.ui     = ui
+    def __init__(self, ui, realtime=None):
+        self.ui = ui
         self._todos = []
         self.worker = LogsWorker()
         self.worker.dados_prontos.connect(self._preencher)
+
+        if realtime:
+            realtime.logs_mudou.connect(self._carregar)
+
         self.ui.btn_refresh.clicked.connect(self._carregar)
         self.ui.input_busca.textChanged.connect(self._filtrar)
         self._carregar()
@@ -35,7 +39,8 @@ class LogsController:
             self._preencher(self._todos)
             return
         filtrados = [
-            l for l in self._todos
+            l
+            for l in self._todos
             if texto.lower() in l.get("acao", "").lower()
             or texto.lower() in (l.get("username") or "").lower()
         ]
@@ -53,7 +58,7 @@ class LogsController:
             data = "—"
             if l.get("criado_em"):
                 try:
-                    dt   = datetime.fromisoformat(l["criado_em"].replace("Z", "+00:00"))
+                    dt = datetime.fromisoformat(l["criado_em"].replace("Z", "+00:00"))
                     data = dt.strftime("%d/%m/%Y %H:%M")
                 except Exception:
                     pass

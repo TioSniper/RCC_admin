@@ -1,13 +1,21 @@
 import threading
 from datetime import datetime, timezone
 from PyQt6.QtWidgets import (
-    QTableWidgetItem, QWidget, QHBoxLayout,
-    QPushButton, QLabel, QLineEdit, QComboBox
+    QTableWidgetItem,
+    QWidget,
+    QHBoxLayout,
+    QPushButton,
+    QLabel,
+    QLineEdit,
+    QComboBox,
 )
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
 from utils.supabase_admin import (
-    listar_acessos_extras, dar_acesso_extra,
-    revogar_acesso_extra, listar_usuarios, listar_modulos
+    listar_acessos_extras,
+    dar_acesso_extra,
+    revogar_acesso_extra,
+    listar_usuarios,
+    listar_modulos,
 )
 
 
@@ -23,10 +31,14 @@ class AcessosWorker(QObject):
 
 class AcessosController:
 
-    def __init__(self, ui):
-        self.ui     = ui
+    def __init__(self, ui, realtime=None):
+        self.ui = ui
         self.worker = AcessosWorker()
         self.worker.dados_prontos.connect(self._preencher)
+
+        if realtime:
+            realtime.acessos_mudou.connect(self._carregar)
+
         self._conectar_eventos()
         self._carregar()
 
@@ -45,19 +57,19 @@ class AcessosController:
             row = tabela.rowCount()
             tabela.insertRow(row)
 
-            username  = a.get("username", "—")
-            modulo    = a.get("modulo_nome", "—")
+            username = a.get("username", "—")
+            modulo = a.get("modulo_nome", "—")
             acesso_id = a.get("id", "")
-            user_id   = a.get("user_id", "")
-            expira    = "—"
-            horas     = 0
+            user_id = a.get("user_id", "")
+            expira = "—"
+            horas = 0
 
             if a.get("expira_em"):
                 try:
-                    dt     = datetime.fromisoformat(a["expira_em"].replace("Z", "+00:00"))
+                    dt = datetime.fromisoformat(a["expira_em"].replace("Z", "+00:00"))
                     expira = dt.strftime("%d/%m/%Y %H:%M")
-                    diff   = dt - datetime.now(timezone.utc)
-                    horas  = max(0, int(diff.total_seconds() / 3600))
+                    diff = dt - datetime.now(timezone.utc)
+                    horas = max(0, int(diff.total_seconds() / 3600))
                 except Exception:
                     pass
 
@@ -79,13 +91,15 @@ class AcessosController:
             btn_revogar = QPushButton("Revogar")
             btn_revogar.setFixedHeight(26)
             btn_revogar.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn_revogar.setStyleSheet("""
+            btn_revogar.setStyleSheet(
+                """
                 QPushButton {
                     background-color: #dc2626; color: white;
                     border-radius: 5px; font-size: 11px;
                     border: none; padding: 0 8px;
                 }
-            """)
+            """
+            )
             btn_revogar.clicked.connect(
                 lambda _, aid=acesso_id, uid=user_id: self._confirmar_revogar(aid, uid)
             )
@@ -97,6 +111,7 @@ class AcessosController:
 
     def _dialog_novo_acesso(self):
         from telas.dialogs import DialogBase
+
         dialog = DialogBase("➕  Novo Acesso Extra", parent=self.ui)
 
         estilo_combo = """
@@ -137,8 +152,9 @@ class AcessosController:
         lbl_aviso = QLabel("")
         lbl_aviso.setStyleSheet("color: #ff5c5c; font-size: 11px;")
 
-        for i, w in enumerate([lbl_user, combo_user, lbl_mod, combo_mod,
-                                lbl_horas, inp_horas, lbl_aviso]):
+        for i, w in enumerate(
+            [lbl_user, combo_user, lbl_mod, combo_mod, lbl_horas, inp_horas, lbl_aviso]
+        ):
             dialog._layout_corpo.insertWidget(i, w)
 
         def _salvar():
@@ -149,24 +165,34 @@ class AcessosController:
             except ValueError:
                 lbl_aviso.setText("⚠️  Informe um número válido de horas.")
                 return
-            ok, msg = dar_acesso_extra(
-                combo_user.currentData(), combo_mod.currentData(), horas
-            )
-            if ok:
-                dialog.accept()
-                self._carregar()
-            else:
-                lbl_aviso.setText(f"⚠️  {msg}")
+
+            def _run():
+                ok, msg = dar_acesso_extra(
+                    combo_user.currentData(), combo_mod.currentData(), horas
+                )
+                if ok:
+                    dialog.accept()
+                    self._carregar()
+                else:
+                    lbl_aviso.setText(f"⚠️  {msg}")
+
+            threading.Thread(target=_run, daemon=True).start()
 
         dialog._btn_confirmar.clicked.connect(_salvar)
         dialog.exec()
 
     def _confirmar_revogar(self, acesso_id: str, user_id: str):
         from telas.dialogs import DialogConfirmacao
-        dialog = DialogConfirmacao("Deseja revogar este acesso extra?", parent=self.ui)
-        if dialog.exec():
-            revogar_acesso_extra(acesso_id, user_id)
-            self._carregar()
+
+        if DialogConfirmacao(
+            "Deseja revogar este acesso extra?", parent=self.ui
+        ).exec():
+
+            def _run():
+                revogar_acesso_extra(acesso_id, user_id)
+                self._carregar()
+
+            threading.Thread(target=_run, daemon=True).start()
 
     def _item(self, texto: str) -> QTableWidgetItem:
         item = QTableWidgetItem(str(texto))
