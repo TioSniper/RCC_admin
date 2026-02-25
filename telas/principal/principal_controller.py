@@ -18,6 +18,8 @@ from telas.relatorios.relatorios_controller import RelatoriosController
 from telas.logs.logs_ui import LogsUI
 from telas.logs.logs_controller import LogsController
 
+APP_ENCERRANDO = False
+
 
 class PrincipalController:
 
@@ -104,7 +106,15 @@ class PrincipalController:
     def _fechar(self):
         from utils.supabase_admin import _logs
 
-        if self._realtime:
-            self._realtime.parar()
-        _logs.forcar_salvar()
-        QApplication.quit()
+        try:
+            if self._realtime:
+                print("[Realtime] Parando conexão...")
+                self._realtime.parar()
+
+            _logs.forcar_salvar()
+
+        except Exception as e:
+            print("Erro ao fechar recursos:", e)
+
+        self.ui.close()  # ← em vez de QApplication.quit()
+        APP_ENCERRANDO = True

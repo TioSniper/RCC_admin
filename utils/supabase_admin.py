@@ -11,7 +11,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 
 
-cliente: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+cliente = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 # ═══════════════════════════════════════════════════════════════
 # LOGS EM LOTE

@@ -1,9 +1,3 @@
-"""
-Gerenciador centralizado de Realtime para o Admin.
-Uma única conexão websocket escuta todas as tabelas
-e distribui eventos para os controllers via sinais Qt.
-"""
-
 import asyncio
 import json
 import threading
@@ -45,9 +39,16 @@ class AdminRealtime(QObject):
         print("[Realtime] Iniciando...")
 
     def parar(self):
+        print("[Realtime] Encerrando...")
+
         self._rodando = False
+
+        # Não pare o loop manualmente!
+        # Apenas deixe o while terminar naturalmente.
+
+        print("[Realtime] Sinal de parada enviado.")
         if self._loop and self._loop.is_running():
-            self._loop.call_soon_threadsafe(self._loop.stop)
+            asyncio.run_coroutine_threadsafe(asyncio.sleep(0), self._loop)
 
     def _run_loop(self):
         self._loop = asyncio.new_event_loop()
