@@ -31,11 +31,54 @@ class DashboardWorker(QObject):
         self.dados_prontos.emit(resumo, expirando, solicitacoes)
 
 
+class AprovacaoWorker(QObject):
+    """Worker para aprovar solicitação sem travar a UI."""
+
+    sucesso = pyqtSignal(str)  # mensagem
+    erro = pyqtSignal(str)  # mensagem de erro
+
+    def __init__(self, sol_id: str, username: str, dias: int):
+        super().__init__()
+        self._sol_id = sol_id
+        self._username = username
+        self._dias = dias
+
+    def executar(self):
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        ok, msg = aprovar_solicitacao(self._sol_id, self._username, self._dias)
+        if ok:
+            self.sucesso.emit(msg)
+        else:
+            self.erro.emit(msg)
+
+
+class RejeicaoWorker(QObject):
+    concluido = pyqtSignal()
+    erro = pyqtSignal(str)
+
+    def __init__(self, sol_id: str):
+        super().__init__()
+        self._sol_id = sol_id
+
+    def executar(self):
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        ok, msg = rejeitar_solicitacao(self._sol_id)
+        if ok:
+            self.concluido.emit()
+        else:
+            self.erro.emit(msg)
+
+
 class DashboardController:
 
     def __init__(self, ui):
         self.ui = ui
         self.worker = DashboardWorker()
+        self._workers_aprovacao = []  # mantém referências vivas
         self.worker.dados_prontos.connect(self._atualizar_ui)
         self._conectar_eventos()
         self._carregar_dados()
@@ -103,7 +146,6 @@ class DashboardController:
         tabela = self.ui.tabela_solicitacoes
         tabela.setRowCount(0)
 
-        # Badge de pendentes
         total = len(solicitacoes)
         self.ui.card_pendentes.setText(str(total))
         cor = "#dc2626" if total > 0 else "#16a34a"
@@ -181,16 +223,14 @@ class DashboardController:
             tabela.setCellWidget(row, 3, _centralizar(btn_rejeitar))
             tabela.setRowHeight(row, 40)
 
-    # ── Diálogos ───────────────────────────────────────────────
+    # ── Diálogo aprovar ────────────────────────────────────────
 
     def _dialog_aprovar(self, sol_id: str, username: str):
         from telas.dialogs import DialogBase
 
         dialog = DialogBase("✅  Aprovar Cadastro", parent=self.ui)
 
-        lbl_info = QLabel(
-            f"Aprovando cadastro de:  <b style='color:#FFD700'>{username}</b>"
-        )
+        lbl_info = QLabel(f"Aprovando:  <b style='color:#FFD700'>{username}</b>")
         lbl_info.setStyleSheet("color: #cccccc; font-size: 12px;")
 
         lbl_dias = QLabel("Dias de acesso inicial:")
@@ -208,6 +248,9 @@ class DashboardController:
         dialog._layout_corpo.insertWidget(2, inp_dias)
         dialog._layout_corpo.insertWidget(3, lbl_aviso)
 
+        # Worker com sinais para não chamar dialog.accept() de thread secundária
+        self._worker_aprov = None
+
         def _salvar():
             try:
                 dias = int(inp_dias.text().strip())
@@ -219,37 +262,45 @@ class DashboardController:
 
             dialog._btn_confirmar.setEnabled(False)
             dialog._btn_confirmar.setText("Aprovando...")
+            lbl_aviso.setText("")
 
-            def _executar():
-                ok, msg = aprovar_solicitacao(sol_id, username, dias)
-                if ok:
-                    dialog.accept()
-                    self._carregar_dados()
-                else:
-                    lbl_aviso.setText(f"⚠️  {msg}")
-                    dialog._btn_confirmar.setEnabled(True)
-                    dialog._btn_confirmar.setText("✓  Confirmar")
+            worker = AprovacaoWorker(sol_id, username, dias)
+            self._workers_aprovacao.append(worker)  # mantém referência
 
-            threading.Thread(target=_executar, daemon=True).start()
+            def _on_sucesso(msg: str):
+                dialog.accept()  # thread principal ✅
+                self._carregar_dados()
+                self._workers_aprovacao.clear()
+
+            def _on_erro(msg: str):
+                lbl_aviso.setText(f"⚠️  {msg}")
+                dialog._btn_confirmar.setEnabled(True)
+                dialog._btn_confirmar.setText("✓  Confirmar")
+
+            worker.sucesso.connect(_on_sucesso)
+            worker.erro.connect(_on_erro)
+            worker.executar()
 
         dialog._btn_confirmar.clicked.connect(_salvar)
         dialog.exec()
+
+    # ── Diálogo rejeitar ───────────────────────────────────────
 
     def _dialog_rejeitar(self, sol_id: str, username: str):
         from telas.dialogs import DialogConfirmacao
 
         dialog = DialogConfirmacao(
             f"Deseja rejeitar a solicitação de '{username}'?\n"
-            "O usuário será notificado na próxima vez que abrir o app.",
+            "O usuário será notificado ao abrir o app.",
             parent=self.ui,
         )
         if dialog.exec():
+            worker = RejeicaoWorker(sol_id)
+            self._workers_aprovacao.append(worker)
 
-            def _executar():
-                rejeitar_solicitacao(sol_id)
-                self._carregar_dados()
-
-            threading.Thread(target=_executar, daemon=True).start()
+            worker.concluido.connect(self._carregar_dados)
+            worker.concluido.connect(lambda: self._workers_aprovacao.clear())
+            worker.executar()
 
     def _item(self, texto: str) -> QTableWidgetItem:
         item = QTableWidgetItem(str(texto))

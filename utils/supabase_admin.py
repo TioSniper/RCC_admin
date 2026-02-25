@@ -615,107 +615,6 @@ def listar_logs(limite: int = 200) -> list:
 
 # ═══════════════════════════════════════════════════════════════
 # SOLICITAÇÕES DE CADASTRO
-# ═══════════════════════════════════════════════════════════════
-
-
-def listar_solicitacoes() -> list:
-    try:
-        r = (
-            _cliente()
-            .table("solicitacoes")
-            .select("id, username, criado_em")
-            .eq("status", "pendente")
-            .order("criado_em")
-            .execute()
-        )
-        return r.data
-    except Exception as e:
-        print(f"Erro ao listar solicitações: {e}")
-        return []
-
-
-def aprovar_solicitacao(sol_id: str, username: str, dias: int) -> tuple[bool, str]:
-    try:
-        # Cria o usuário no Supabase Auth
-        email = f"{username}@rcc.app"
-        # Busca a senha_hash da solicitação para usar como senha temporária
-        sol = (
-            _cliente()
-            .table("solicitacoes")
-            .select("senha_hash")
-            .eq("id", sol_id)
-            .execute()
-        )
-        if not sol.data:
-            return False, "Solicitação não encontrada."
-
-        senha_temp = sol.data[0]["senha_hash"][
-            :16
-        ]  # primeiros 16 chars do hash como senha temp
-
-        response = _cliente().auth.admin.create_user(
-            {
-                "email": email,
-                "password": senha_temp,
-                "email_confirm": True,
-            }
-        )
-        user_id = response.user.id
-
-        # Atualiza username no perfil
-        _cliente().table("perfis").update({"username": username}).eq(
-            "id", user_id
-        ).execute()
-
-        # Cria assinatura com plano mvp_timer
-        planos = (
-            _cliente().table("planos").select("id").eq("nome", "mvp_timer").execute()
-        )
-        if planos.data:
-            plano_id = planos.data[0]["id"]
-            _cliente().rpc(
-                "criar_assinatura_admin",
-                {
-                    "p_user_id": user_id,
-                    "p_plano_id": plano_id,
-                    "p_dias": dias,
-                },
-            ).execute()
-
-        # Atualiza status da solicitação para aprovado
-        _cliente().table("solicitacoes").update(
-            {
-                "status": "aprovado",
-                "atualizado": "now()",
-            }
-        ).eq("id", sol_id).execute()
-
-        _logs.registrar(
-            "aprovar_solicitacao", user_id, {"username": username, "dias": dias}
-        )
-        _cache.invalidar("usuarios")
-
-        return True, "Usuário aprovado com sucesso."
-    except Exception as e:
-        return False, f"Erro: {e}"
-
-
-def rejeitar_solicitacao(sol_id: str) -> tuple[bool, str]:
-    try:
-        _cliente().table("solicitacoes").update(
-            {
-                "status": "rejeitado",
-                "atualizado": "now()",
-            }
-        ).eq("id", sol_id).execute()
-        _logs.registrar("rejeitar_solicitacao", detalhes={"sol_id": sol_id})
-        return True, "Solicitação rejeitada."
-    except Exception as e:
-        return False, f"Erro: {e}"
-
-
-# ═══════════════════════════════════════════════════════════════
-# SOLICITAÇÕES DE CADASTRO
 # Adicione estas funções no final do utils/supabase_admin.py
 # ═══════════════════════════════════════════════════════════════
 
@@ -780,9 +679,7 @@ def aprovar_solicitacao(sol_id: str, username: str, dias: int) -> tuple[bool, st
         ).execute()
 
         # Busca plano mvp_timer
-        planos = (
-            _cliente().table("planos").select("id").eq("nome", "mvp_timer").execute()
-        )
+        planos = _cliente().table("planos").select("id").eq("nome", "Basico").execute()
 
         if planos.data:
             plano_id = planos.data[0]["id"]
