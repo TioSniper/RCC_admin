@@ -1,20 +1,26 @@
 from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QFrame, QStackedWidget, QSizePolicy
+    QMainWindow,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QFrame,
+    QStackedWidget,
+    QSizePolicy,
 )
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QIcon
 
 
 MENU_ITENS = [
-    {"id": "dashboard",   "emoji": "📊", "nome": "Dashboard"},
-    {"id": "usuarios",    "emoji": "👥", "nome": "Usuários"},
+    {"id": "dashboard", "emoji": "📊", "nome": "Dashboard"},
+    {"id": "usuarios", "emoji": "👥", "nome": "Usuários"},
     {"id": "assinaturas", "emoji": "📋", "nome": "Assinaturas"},
-    {"id": "planos",      "emoji": "🎯", "nome": "Planos"},
-    {"id": "modulos",     "emoji": "🧩", "nome": "Módulos"},
-    {"id": "acessos",     "emoji": "🔑", "nome": "Acessos Extras"},
-    {"id": "relatorios",  "emoji": "📈", "nome": "Relatórios"},
-    {"id": "logs",        "emoji": "📝", "nome": "Logs"},
+    {"id": "planos", "emoji": "🎯", "nome": "Planos"},
+    {"id": "modulos", "emoji": "🧩", "nome": "Módulos"},
+    {"id": "acessos", "emoji": "🔑", "nome": "Acessos Extras"},
+    {"id": "logs", "emoji": "📝", "nome": "Logs"},
 ]
 
 
@@ -90,7 +96,6 @@ class PrincipalUI(QMainWindow):
         layout_menu.setContentsMargins(0, 0, 0, 0)
         layout_menu.setSpacing(0)
 
-        # Header menu
         header_menu = QFrame()
         header_menu.setObjectName("header_menu")
         header_menu.setFixedHeight(56)
@@ -112,7 +117,6 @@ class PrincipalUI(QMainWindow):
         layout_header.addWidget(self.btn_toggle_menu)
         layout_menu.addWidget(header_menu)
 
-        # Botões do menu
         self.btns_menu = {}
         for item in MENU_ITENS:
             btn = QPushButton(f"  {item['emoji']}  {item['nome']}")
@@ -125,7 +129,6 @@ class PrincipalUI(QMainWindow):
 
         layout_menu.addStretch()
 
-        # Versão
         lbl_versao = QLabel("v1.0.0")
         lbl_versao.setStyleSheet("color: #334466; font-size: 10px;")
         lbl_versao.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -151,7 +154,8 @@ class PrincipalUI(QMainWindow):
         self._aplicar_estilos()
 
     def _aplicar_estilos(self):
-        self.setStyleSheet("""
+        self.setStyleSheet(
+            """
             QWidget#widget_central {
                 background: qradialgradient(cx:0.5, cy:0.5, radius:1,
                             fx:0.5, fy:0.5,
@@ -159,83 +163,52 @@ class PrincipalUI(QMainWindow):
                             stop:1 #0a1228);
                 border-radius: 18px;
             }
-
             QMainWindow { background-color: transparent; }
-
             QWidget#container_direito { background-color: transparent; }
             QWidget#area_principal    { background-color: transparent; }
-
             QFrame#barra_topo {
                 background-color: rgba(15, 26, 61, 0.8);
                 border-bottom: 2px solid #FFD700;
                 border-top-left-radius: 18px;
                 border-top-right-radius: 18px;
             }
-
             #label_titulo { color: #FFD700; }
-
             #btn_minimizar {
-                background-color: transparent;
-                color: white;
-                border-radius: 8px;
-                font-size: 16px;
-                font-weight: bold;
-                border: none;
+                background-color: transparent; color: white;
+                border-radius: 8px; font-size: 16px; font-weight: bold; border: none;
             }
             #btn_minimizar:hover { background-color: #2563EB; }
-
             #btn_maximizar {
-                background-color: transparent;
-                color: white;
-                border-radius: 8px;
-                font-size: 14px;
-                font-weight: bold;
-                border: none;
+                background-color: transparent; color: white;
+                border-radius: 8px; font-size: 14px; font-weight: bold; border: none;
             }
             #btn_maximizar:hover { background-color: #10b981; }
-
             #btn_fechar {
-                background-color: #DC2626;
-                color: white;
-                border-radius: 8px;
-                font-size: 14px;
-                font-weight: bold;
-                border: none;
+                background-color: #DC2626; color: white;
+                border-radius: 8px; font-size: 14px; font-weight: bold; border: none;
             }
             #btn_fechar:hover { background-color: #B91C1C; }
-
             QFrame#menu_lateral {
                 background-color: rgba(15, 26, 61, 0.9);
                 border-right: 2px solid #FFD700;
             }
-
             QFrame#header_menu {
                 background-color: rgba(255, 215, 0, 0.1);
                 border-bottom: 2px solid #FFD700;
             }
-
             #label_menu_header { color: #FFD700; }
-
             QPushButton#btn_toggle_menu {
-                background-color: transparent;
-                color: #FFD700;
-                border: none;
-                font-weight: bold;
-                font-size: 12px;
+                background-color: transparent; color: #FFD700;
+                border: none; font-weight: bold; font-size: 12px;
             }
             QPushButton#btn_toggle_menu:hover {
-                background-color: rgba(255, 215, 0, 0.2);
-                border-radius: 6px;
+                background-color: rgba(255, 215, 0, 0.2); border-radius: 6px;
             }
-
             QPushButton#btn_menu {
-                background-color: transparent;
-                color: #ffffff;
-                text-align: left;
-                border: none;
+                background-color: transparent; color: #ffffff;
+                text-align: left; border: none;
                 border-left: 3px solid transparent;
-                font-size: 13px;
-                padding-left: 8px;
+                font-size: 13px; padding-left: 8px;
             }
             QPushButton#btn_menu:hover {
                 background-color: rgba(255, 215, 0, 0.1);
@@ -244,51 +217,37 @@ class PrincipalUI(QMainWindow):
             QPushButton#btn_menu:checked {
                 background-color: rgba(255, 215, 0, 0.15);
                 border-left: 3px solid #FFD700;
-                color: #FFD700;
-                font-weight: bold;
+                color: #FFD700; font-weight: bold;
             }
-
             QStackedWidget#area_conteudo { background-color: transparent; }
-
             QLabel { color: #cccccc; }
-
             QTableWidget {
                 background-color: rgba(15, 26, 61, 0.5);
-                border: 1px solid #2a3f7a;
-                border-radius: 8px;
-                color: white;
-                gridline-color: #1a2854;
+                border: 1px solid #2a3f7a; border-radius: 8px;
+                color: white; gridline-color: #1a2854;
             }
             QTableWidget::item:selected {
-                background-color: rgba(255, 215, 0, 0.15);
-                color: #FFD700;
+                background-color: rgba(255, 215, 0, 0.15); color: #FFD700;
             }
             QHeaderView::section {
-                background-color: rgba(15, 26, 61, 0.9);
-                color: #FFD700;
-                border: none;
-                border-bottom: 1px solid #FFD700;
-                padding: 6px;
-                font-weight: bold;
+                background-color: rgba(15, 26, 61, 0.9); color: #FFD700;
+                border: none; border-bottom: 1px solid #FFD700;
+                padding: 6px; font-weight: bold;
             }
-
             QScrollBar:vertical {
-                background: rgba(15, 26, 61, 0.5);
-                width: 6px;
-                border-radius: 3px;
+                background: rgba(15, 26, 61, 0.5); width: 6px; border-radius: 3px;
             }
-            QScrollBar::handle:vertical {
-                background: #FFD700;
-                border-radius: 3px;
-            }
-            QScrollBar::add-line:vertical,
-            QScrollBar::sub-line:vertical { height: 0px; }
-        """)
+            QScrollBar::handle:vertical { background: #FFD700; border-radius: 3px; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+        """
+        )
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             if event.position().y() < 48:
-                self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                self._drag_pos = (
+                    event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                )
 
     def mouseMoveEvent(self, event):
         if self._drag_pos and event.buttons() == Qt.MouseButton.LeftButton:

@@ -25,7 +25,7 @@ class LogsController:
         self.worker.dados_prontos.connect(self._preencher)
 
         if realtime:
-            realtime.logs_mudou.connect(self._carregar)
+            realtime.logs_mudou.connect(lambda _: self._carregar())
 
         self.ui.btn_refresh.clicked.connect(self._carregar)
         self.ui.input_busca.textChanged.connect(self._filtrar)
@@ -50,11 +50,9 @@ class LogsController:
         self._todos = logs
         t = self.ui.tabela
         t.setRowCount(0)
-
         for l in logs:
             row = t.rowCount()
             t.insertRow(row)
-
             data = "—"
             if l.get("criado_em"):
                 try:
@@ -62,9 +60,7 @@ class LogsController:
                     data = dt.strftime("%d/%m/%Y %H:%M")
                 except Exception:
                     pass
-
             detalhes = json.dumps(l.get("detalhes", {}), ensure_ascii=False)
-
             t.setItem(row, 0, self._item(data))
             t.setItem(row, 1, self._item(l.get("acao", "—")))
             t.setItem(row, 2, self._item(l.get("username") or "—"))

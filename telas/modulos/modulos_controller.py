@@ -22,22 +22,17 @@ class ModulosWorker(QObject):
     editar_pronto = pyqtSignal(bool)
     toggle_pronto = pyqtSignal()
 
-    # Buscar módulos
     def buscar(self):
-        dados = listar_modulos()
-        self.dados_prontos.emit(dados)
+        self.dados_prontos.emit(listar_modulos())
 
-    # Criar módulo
     def salvar(self, id_, nome, desc):
         ok, msg = criar_modulo(id_, nome, desc)
         self.salvar_pronto.emit(ok, msg)
 
-    # Editar módulo
     def editar(self, modulo_id, nome, desc):
         ok, _ = editar_modulo(modulo_id, nome, desc)
         self.editar_pronto.emit(ok)
 
-    # Ativar / Desativar
     def toggle(self, modulo_id, ativo):
         ativar_modulo(modulo_id, not ativo)
         self.toggle_pronto.emit()
@@ -49,10 +44,8 @@ class ModulosController:
         self.ui = ui
         self.thread = QThread()
         self.worker = ModulosWorker()
-
         self.worker.moveToThread(self.thread)
 
-        # Conectar sinais do worker
         self.worker.dados_prontos.connect(self._preencher)
         self.worker.salvar_pronto.connect(self._finalizar_salvar)
         self.worker.editar_pronto.connect(self._finalizar_editar)
@@ -61,7 +54,7 @@ class ModulosController:
         self.thread.start()
 
         if realtime:
-            realtime.modulos_mudou.connect(self._carregar)
+            realtime.modulos_mudou.connect(lambda _: self._carregar())
 
         self._conectar_eventos()
         self._carregar()
@@ -76,11 +69,9 @@ class ModulosController:
     def _preencher(self, modulos: list):
         tabela = self.ui.tabela
         tabela.setRowCount(0)
-
         for m in modulos:
             row = tabela.rowCount()
             tabela.insertRow(row)
-
             ativo = m.get("ativo", True)
             modulo_id = m.get("id", "")
 
@@ -106,11 +97,9 @@ class ModulosController:
                 b.setCursor(Qt.CursorShape.PointingHandCursor)
                 b.setStyleSheet(
                     f"""
-                    QPushButton {{
-                        background-color: {cor}; color: white;
+                    QPushButton {{ background-color: {cor}; color: white;
                         border-radius: 5px; font-size: 11px;
-                        border: none; padding: 0 8px;
-                    }}
+                        border: none; padding: 0 8px; }}
                 """
                 )
                 return b
@@ -132,7 +121,6 @@ class ModulosController:
             l.addWidget(btn_editar)
             l.addWidget(btn_toggle)
             l.addStretch()
-
             tabela.setCellWidget(row, 4, w)
             tabela.setRowHeight(row, 40)
 
@@ -144,11 +132,11 @@ class ModulosController:
 
         dialog = DialogBase("➕  Novo Módulo", parent=self.ui)
 
-        def _campo(label_txt, placeholder, idx):
-            lbl = QLabel(label_txt)
+        def _campo(lbl_txt, ph, idx):
+            lbl = QLabel(lbl_txt)
             lbl.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
             inp = QLineEdit()
-            inp.setPlaceholderText(placeholder)
+            inp.setPlaceholderText(ph)
             inp.setFixedHeight(36)
             inp.setStyleSheet(dialog._estilo_input())
             dialog._layout_corpo.insertWidget(idx * 2, lbl)
@@ -167,10 +155,8 @@ class ModulosController:
             if not inp_id.text().strip() or not inp_nome.text().strip():
                 lbl_aviso.setText("⚠️  Preencha ID e Nome.")
                 return
-
             self._dialog_ref = dialog
             self._lbl_ref = lbl_aviso
-
             self.worker.salvar(inp_id.text(), inp_nome.text(), inp_desc.text())
 
         dialog._btn_confirmar.clicked.connect(_salvar)
@@ -188,8 +174,8 @@ class ModulosController:
 
         dialog = DialogBase("✏️  Editar Módulo", parent=self.ui)
 
-        def _campo(label_txt, valor, idx):
-            lbl = QLabel(label_txt)
+        def _campo(lbl_txt, valor, idx):
+            lbl = QLabel(lbl_txt)
             lbl.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
             inp = QLineEdit(valor)
             inp.setFixedHeight(36)

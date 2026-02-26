@@ -543,6 +543,25 @@ def listar_expirando(dias: int = 7) -> list:
 # ═══════════════════════════════════════════════════════════════
 
 
+def listar_sessoes_ativas() -> set:
+    """Retorna set de user_ids com sessão ativa nos últimos 40 minutos."""
+    try:
+        from datetime import timedelta
+
+        limite = (datetime.now(timezone.utc) - timedelta(minutes=40)).isoformat()
+        r = (
+            _cliente()
+            .table("sessoes_ativas")
+            .select("user_id")
+            .gte("ultimo_ping", limite)
+            .execute()
+        )
+        return {row["user_id"] for row in r.data}
+    except Exception as e:
+        print(f"Erro ao listar sessões ativas: {e}")
+        return set()
+
+
 def listar_logs(limite: int = 200) -> list:
     try:
         r = (

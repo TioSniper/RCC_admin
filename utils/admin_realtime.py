@@ -1,18 +1,19 @@
 import asyncio
 import json
 import threading
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal, QTimer
 
 
 class AdminRealtime(QObject):
-    # Sinais por tabela
-    solicitacoes_mudou = pyqtSignal()
-    usuarios_mudou = pyqtSignal()
-    assinaturas_mudou = pyqtSignal()
-    acessos_mudou = pyqtSignal()
-    logs_mudou = pyqtSignal()
-    planos_mudou = pyqtSignal()
-    modulos_mudou = pyqtSignal()
+    # Sinais por tabela — emitem o payload completo para evitar re-fetch
+    solicitacoes_mudou = pyqtSignal(dict)  # {type, record, old_record}
+    usuarios_mudou = pyqtSignal(dict)
+    assinaturas_mudou = pyqtSignal(dict)
+    acessos_mudou = pyqtSignal(dict)
+    logs_mudou = pyqtSignal(dict)
+    planos_mudou = pyqtSignal(dict)
+    modulos_mudou = pyqtSignal(dict)
+    sessoes_mudou = pyqtSignal(dict)  # para indicador online/offline
 
     _TABELAS = {
         "solicitacoes": "solicitacoes_mudou",
@@ -22,6 +23,7 @@ class AdminRealtime(QObject):
         "logs_admin": "logs_mudou",
         "planos": "planos_mudou",
         "modulos": "modulos_mudou",
+        "sessoes_ativas": "sessoes_mudou",
     }
 
     def __init__(self, supabase_url: str, supabase_key: str):
@@ -30,8 +32,19 @@ class AdminRealtime(QObject):
         self._rodando = False
         self._loop = None
 
-        ws_url = supabase_url.replace("https://", "wss://").replace("http://", "ws://")
-        self._ws_url = f"{ws_url}/realtime/v1/websocket?apikey={supabase_key}&vsn=1.0.0"
+        ws = supabase_url.replace("https://", "wss://").replace("http://", "ws://")
+        self._ws_url = f"{ws}/realtime/v1/websocket?apikey={supabase_key}&vsn=1.0.0"
+
+        # Debounce por tabela — evita flood de sinais
+        self._timers: dict[str, QTimer] = {}
+        self._payloads: dict[str, dict] = {}
+        for tabela, nome_sinal in self._TABELAS.items():
+            t = QTimer()
+            t.setSingleShot(True)
+            t.setInterval(150)
+            t.setProperty("tabela", tabela)
+            t.timeout.connect(lambda tb=tabela: self._emitir(tb))
+            self._timers[tabela] = t
 
     def iniciar(self):
         self._rodando = True
@@ -39,25 +52,38 @@ class AdminRealtime(QObject):
         print("[Realtime] Iniciando...")
 
     def parar(self):
-        print("[Realtime] Encerrando...")
-
         self._rodando = False
+        for t in self._timers.values():
+            t.stop()
+        if self._loop and not self._loop.is_closed():
+            self._loop.call_soon_threadsafe(self._cancelar_tasks)
+        print("[Realtime] Parado.")
 
-        # Não pare o loop manualmente!
-        # Apenas deixe o while terminar naturalmente.
-
-        print("[Realtime] Sinal de parada enviado.")
-        if self._loop and self._loop.is_running():
-            asyncio.run_coroutine_threadsafe(asyncio.sleep(0), self._loop)
+    def _cancelar_tasks(self):
+        tasks = asyncio.all_tasks(self._loop)
+        for t in tasks:
+            t.cancel()
+        self._loop.stop()
 
     def _run_loop(self):
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
         try:
             self._loop.run_until_complete(self._escutar())
+        except (asyncio.CancelledError, RuntimeError):
+            pass
         except Exception as e:
-            print(f"[Realtime] Erro fatal: {e}")
+            if self._rodando:
+                print(f"[Realtime] Erro fatal: {e}")
         finally:
+            try:
+                pending = asyncio.all_tasks(self._loop)
+                if pending:
+                    self._loop.run_until_complete(
+                        asyncio.gather(*pending, return_exceptions=True)
+                    )
+            except Exception:
+                pass
             self._loop.close()
 
     async def _escutar(self):
@@ -81,11 +107,10 @@ class AdminRealtime(QObject):
             print("[Realtime] Conectado")
             ref = 1
 
-            # Inscreve em todas as tabelas num canal único
             await ws.send(
                 json.dumps(
                     {
-                        "topic": "realtime:public",
+                        "topic": "realtime:admin",
                         "event": "phx_join",
                         "payload": {
                             "config": {
@@ -119,7 +144,8 @@ class AdminRealtime(QObject):
                     )
                     ref += 1
                 except Exception as e:
-                    print(f"[Realtime] Erro recv: {e}")
+                    if self._rodando:
+                        print(f"[Realtime] Erro recv: {e}")
                     break
 
     def _processar(self, msg: dict):
@@ -128,25 +154,30 @@ class AdminRealtime(QObject):
 
         if event in ("phx_reply", "phx_close", "heartbeat", "presence_state", "system"):
             return
-
-        # Extrai tabela
-        tabela = None
-        if event == "postgres_changes":
-            tabela = payload.get("data", {}).get("table")
-        elif payload.get("table"):
-            tabela = payload.get("table")
-
-        if not tabela:
+        if event != "postgres_changes":
             return
 
+        data = payload.get("data", {})
+        tabela = data.get("table")
+        if not tabela or tabela not in self._TABELAS:
+            return
+
+        print(f"[Realtime] {data.get('type','?')} em: {tabela}")
+
+        # Guarda o payload mais recente e reinicia debounce
+        self._payloads[tabela] = {
+            "type": data.get("type"),
+            "record": data.get("record", {}),
+            "old_record": data.get("old_record", {}),
+        }
+        self._timers[tabela].start()
+
+    def _emitir(self, tabela: str):
         nome_sinal = self._TABELAS.get(tabela)
-        if not nome_sinal:
-            return
-
-        print(f"[Realtime] Mudança em: {tabela}")
         sinal = getattr(self, nome_sinal, None)
+        payload = self._payloads.get(tabela, {})
         if sinal:
-            sinal.emit()
+            sinal.emit(payload)
 
 
 # ── Instância global ───────────────────────────────────────────

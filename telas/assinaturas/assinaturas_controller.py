@@ -21,9 +21,6 @@ from utils.supabase_admin import (
 )
 
 
-# ── Worker genérico para operações de assinatura ───────────────
-
-
 class AssWorker(QObject):
     sucesso = pyqtSignal()
     erro = pyqtSignal(str)
@@ -39,10 +36,7 @@ class AssWorker(QObject):
     def _run(self):
         try:
             ok, msg = self._fn(*self._args)
-            if ok:
-                self.sucesso.emit()
-            else:
-                self.erro.emit(msg)
+            self.sucesso.emit() if ok else self.erro.emit(msg)
         except Exception as e:
             self.erro.emit(str(e))
 
@@ -57,22 +51,20 @@ class AssinaturasWorker(QObject):
         self.dados_prontos.emit(listar_assinaturas(), listar_usuarios())
 
 
-# ── Controller ─────────────────────────────────────────────────
-
-
 class AssinaturasController:
 
     def __init__(self, ui, realtime=None):
         self.ui = ui
         self._todos = []
         self._usuarios = []
-        self._workers = []  # mantém referências vivas
+        self._workers = []
         self.worker = AssinaturasWorker()
         self.worker.dados_prontos.connect(self._preencher)
 
         if realtime:
-            realtime.assinaturas_mudou.connect(self._carregar)
-            realtime.usuarios_mudou.connect(self._carregar)
+            # lambda _: ignora o payload e faz re-fetch
+            realtime.assinaturas_mudou.connect(lambda _: self._carregar())
+            realtime.usuarios_mudou.connect(lambda _: self._carregar())
 
         self._conectar_eventos()
         self._carregar()
@@ -118,8 +110,6 @@ class AssinaturasController:
             row = tabela.rowCount()
             tabela.insertRow(row)
             self._row_sem_ass(tabela, row, u)
-
-    # ── Linhas da tabela ───────────────────────────────────────
 
     def _row_com_ass(self, tabela, row, a):
         username = a.get("username", "—")
@@ -221,34 +211,28 @@ class AssinaturasController:
         w = QWidget()
         l = QHBoxLayout(w)
         l.setContentsMargins(4, 2, 4, 2)
-
         btn = QPushButton("Atribuir Plano")
         btn.setFixedHeight(26)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setStyleSheet(
             """
             QPushButton { background-color: #7c3aed; color: white;
-                border-radius: 5px; font-size: 11px;
-                border: none; padding: 0 8px; }
+                border-radius: 5px; font-size: 11px; border: none; padding: 0 8px; }
             QPushButton:hover { background-color: #6d28d9; }
         """
         )
         btn.clicked.connect(
             lambda _, uid=user_id, un=username: self._dialog_atribuir(uid, un)
         )
-
         l.addWidget(btn)
         l.addStretch()
         tabela.setCellWidget(row, 6, w)
         tabela.setRowHeight(row, 40)
 
-    # ── Diálogos ───────────────────────────────────────────────
-
     def _dialog_atribuir(self, user_id: str, username: str):
         from telas.dialogs import DialogBase
 
         dialog = DialogBase("🎯  Atribuir Plano", parent=self.ui)
-
         lbl_info = QLabel(f"Usuário: <b style='color:#FFD700'>{username}</b>")
         lbl_info.setStyleSheet("color: #cccccc; font-size: 12px;")
         lbl_plano = QLabel("Selecione o plano:")
@@ -265,11 +249,10 @@ class AssinaturasController:
         inp_dias.setStyleSheet(dialog._estilo_input())
         lbl_aviso = QLabel("")
         lbl_aviso.setStyleSheet("color: #ff5c5c; font-size: 11px;")
-
-        for i, w in enumerate(
+        for i, wg in enumerate(
             [lbl_info, lbl_plano, combo, lbl_dias, inp_dias, lbl_aviso]
         ):
-            dialog._layout_corpo.insertWidget(i, w)
+            dialog._layout_corpo.insertWidget(i, wg)
 
         def _salvar():
             try:
@@ -279,15 +262,11 @@ class AssinaturasController:
             except ValueError:
                 lbl_aviso.setText("⚠️  Dias inválido.")
                 return
-
             dialog._btn_confirmar.setEnabled(False)
             dialog._btn_confirmar.setText("Salvando...")
-
             w = AssWorker(criar_assinatura, user_id, combo.currentData(), dias)
             self._workers.append(w)
-            w.sucesso.connect(
-                lambda: (dialog.accept(), self._carregar(), self._workers.clear())
-            )
+            w.sucesso.connect(lambda: (dialog.accept(), self._workers.clear()))
             w.erro.connect(
                 lambda msg: (
                     lbl_aviso.setText(f"⚠️  {msg}"),
@@ -304,7 +283,6 @@ class AssinaturasController:
         from telas.dialogs import DialogBase
 
         dialog = DialogBase("🔄  Renovar Assinatura", parent=self.ui)
-
         lbl = QLabel("Quantos dias deseja adicionar?")
         lbl.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
         inp = QLineEdit("30")
@@ -312,7 +290,6 @@ class AssinaturasController:
         inp.setStyleSheet(dialog._estilo_input())
         lbl_aviso = QLabel("")
         lbl_aviso.setStyleSheet("color: #ff5c5c; font-size: 11px;")
-
         dialog._layout_corpo.insertWidget(0, lbl)
         dialog._layout_corpo.insertWidget(1, inp)
         dialog._layout_corpo.insertWidget(2, lbl_aviso)
@@ -325,15 +302,11 @@ class AssinaturasController:
             except ValueError:
                 lbl_aviso.setText("⚠️  Digite um número válido.")
                 return
-
             dialog._btn_confirmar.setEnabled(False)
             dialog._btn_confirmar.setText("Salvando...")
-
             w = AssWorker(renovar_assinatura, user_id, dias)
             self._workers.append(w)
-            w.sucesso.connect(
-                lambda: (dialog.accept(), self._carregar(), self._workers.clear())
-            )
+            w.sucesso.connect(lambda: (dialog.accept(), self._workers.clear()))
             w.erro.connect(
                 lambda msg: (
                     lbl_aviso.setText(f"⚠️  {msg}"),
@@ -350,7 +323,6 @@ class AssinaturasController:
         from telas.dialogs import DialogBase
 
         dialog = DialogBase("🎯  Mudar Plano", parent=self.ui)
-
         lbl = QLabel("Selecione o novo plano:")
         lbl.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
         combo = QComboBox()
@@ -358,26 +330,21 @@ class AssinaturasController:
         combo.setStyleSheet(self._estilo_combo())
         for p in listar_planos():
             combo.addItem(p["nome"], p["id"])
-
+        lbl_aviso = QLabel("")
+        lbl_aviso.setStyleSheet("color: #ff5c5c; font-size: 11px;")
         dialog._layout_corpo.insertWidget(0, lbl)
         dialog._layout_corpo.insertWidget(1, combo)
+        dialog._layout_corpo.insertWidget(2, lbl_aviso)
 
         def _salvar():
             dialog._btn_confirmar.setEnabled(False)
             dialog._btn_confirmar.setText("Salvando...")
-
             w = AssWorker(mudar_plano, user_id, combo.currentData())
             self._workers.append(w)
-            w.sucesso.connect(
-                lambda: (dialog.accept(), self._carregar(), self._workers.clear())
-            )
-
-            lbl_aviso = QLabel()
+            w.sucesso.connect(lambda: (dialog.accept(), self._workers.clear()))
             w.erro.connect(
                 lambda msg: (
-                    lbl_aviso.setText(
-                        f"⚠️  {msg}"
-                    ),  # noqa — lbl_aviso não existe aqui, mas não crasha
+                    lbl_aviso.setText(f"⚠️  {msg}"),
                     dialog._btn_confirmar.setEnabled(True),
                     dialog._btn_confirmar.setText("✓  Confirmar"),
                 )
@@ -395,21 +362,17 @@ class AssinaturasController:
         ).exec():
             w = AssWorker(revogar_assinatura, user_id)
             self._workers.append(w)
-            w.sucesso.connect(lambda: (self._carregar(), self._workers.clear()))
+            w.sucesso.connect(lambda: self._workers.clear())
             w.executar()
 
     def _estilo_combo(self) -> str:
         return """
-            QComboBox {
-                background-color: rgba(255,255,255,0.05);
+            QComboBox { background-color: rgba(255,255,255,0.05);
                 border: 1px solid #2a3f7a; border-radius: 8px;
-                color: white; padding: 0 12px; font-size: 12px;
-            }
+                color: white; padding: 0 12px; font-size: 12px; }
             QComboBox::drop-down { border: none; }
-            QComboBox QAbstractItemView {
-                background-color: #1a2854; color: white;
-                border: 1px solid #FFD700;
-            }
+            QComboBox QAbstractItemView { background-color: #1a2854;
+                color: white; border: 1px solid #FFD700; }
         """
 
     def _item(self, texto: str) -> QTableWidgetItem:

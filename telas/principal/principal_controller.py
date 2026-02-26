@@ -13,12 +13,8 @@ from telas.modulos.modulos_ui import ModulosUI
 from telas.modulos.modulos_controller import ModulosController
 from telas.acessos.acessos_ui import AcessosUI
 from telas.acessos.acessos_controller import AcessosController
-from telas.relatorios.relatorios_ui import RelatoriosUI
-from telas.relatorios.relatorios_controller import RelatoriosController
 from telas.logs.logs_ui import LogsUI
 from telas.logs.logs_controller import LogsController
-
-APP_ENCERRANDO = False
 
 
 class PrincipalController:
@@ -34,7 +30,6 @@ class PrincipalController:
     def _carregar_paginas(self):
         rt = self._realtime
 
-        # Telas que usam Realtime recebem rt, as outras recebem None
         paginas = {
             "dashboard": (DashboardUI, lambda ui: DashboardController(ui, rt)),
             "usuarios": (UsuariosUI, lambda ui: UsuariosController(ui, rt)),
@@ -42,7 +37,6 @@ class PrincipalController:
             "planos": (PlanosUI, lambda ui: PlanosController(ui, rt)),
             "modulos": (ModulosUI, lambda ui: ModulosController(ui, rt)),
             "acessos": (AcessosUI, lambda ui: AcessosController(ui, rt)),
-            "relatorios": (RelatoriosUI, lambda ui: RelatoriosController(ui)),
             "logs": (LogsUI, lambda ui: LogsController(ui, rt)),
         }
 
@@ -67,10 +61,8 @@ class PrincipalController:
     def _ir_para(self, id_pagina: str):
         for btn in self.ui.btns_menu.values():
             btn.setChecked(False)
-
         if id_pagina in self.ui.btns_menu:
             self.ui.btns_menu[id_pagina].setChecked(True)
-
         if id_pagina in self._paginas:
             self.ui.area_conteudo.setCurrentWidget(self._paginas[id_pagina])
 
@@ -88,7 +80,6 @@ class PrincipalController:
         else:
             self.ui.menu_lateral.setFixedWidth(220)
             self.ui.btn_toggle_menu.setText("◀")
-
             from telas.principal.principal_ui import MENU_ITENS
 
             for item in MENU_ITENS:
@@ -110,11 +101,7 @@ class PrincipalController:
             if self._realtime:
                 print("[Realtime] Parando conexão...")
                 self._realtime.parar()
-
             _logs.forcar_salvar()
-
         except Exception as e:
             print("Erro ao fechar recursos:", e)
-
-        self.ui.close()  # ← em vez de QApplication.quit()
-        APP_ENCERRANDO = True
+        self.ui.close()

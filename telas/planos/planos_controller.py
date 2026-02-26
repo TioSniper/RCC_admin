@@ -30,8 +30,7 @@ class PlanosWorker(QObject):
     delete_pronto = pyqtSignal(bool)
 
     def buscar(self):
-        planos = listar_planos()
-        self.dados_prontos.emit(planos)
+        self.dados_prontos.emit(listar_planos())
 
     def toggle(self, plano_id, ativo):
         ativar_plano(plano_id, not ativo)
@@ -51,7 +50,6 @@ class PlanosWorker(QObject):
                 adicionar_modulo_plano(plano_id, mid)
             elif not checked and mid in modulos_atuais:
                 remover_modulo_plano(plano_id, mid)
-
         self.modulos_pronto.emit()
 
     def excluir(self, plano_id):
@@ -67,7 +65,6 @@ class PlanosController:
         self.worker = PlanosWorker()
         self.worker.moveToThread(self.thread)
 
-        # conectar sinais
         self.worker.dados_prontos.connect(self._preencher)
         self.worker.toggle_pronto.connect(self._carregar)
         self.worker.salvar_pronto.connect(self._finalizar_salvar)
@@ -75,9 +72,11 @@ class PlanosController:
         self.worker.modulos_pronto.connect(self._finalizar_modulos)
         self.worker.delete_pronto.connect(self._finalizar_exclusao)
 
+        self.thread.start()
+
         if realtime:
-            realtime.planos_mudou.connect(self._carregar)
-            realtime.modulos_mudou.connect(self._carregar)
+            realtime.planos_mudou.connect(lambda _: self._carregar())
+            realtime.modulos_mudou.connect(lambda _: self._carregar())
 
         self._conectar_eventos()
         self._carregar()
@@ -97,7 +96,6 @@ class PlanosController:
         for p in planos:
             row = tabela.rowCount()
             tabela.insertRow(row)
-
             ativo = p.get("ativo", True)
             plano_id = p.get("id", "")
             modulos_ids = [m["modulo_id"] for m in p.get("planos_modulos", [])]
@@ -128,11 +126,9 @@ class PlanosController:
                 b.setCursor(Qt.CursorShape.PointingHandCursor)
                 b.setStyleSheet(
                     f"""
-                    QPushButton {{
-                        background-color: {cor}; color: white;
+                    QPushButton {{ background-color: {cor}; color: white;
                         border-radius: 5px; font-size: 11px;
-                        border: none; padding: 0 8px;
-                    }}
+                        border: none; padding: 0 8px; }}
                 """
                 )
                 return b
@@ -166,7 +162,6 @@ class PlanosController:
             l.addWidget(btn_toggle)
             l.addWidget(btn_excluir)
             l.addStretch()
-
             tabela.setCellWidget(row, 4, w)
             tabela.setRowHeight(row, 40)
 
@@ -178,11 +173,11 @@ class PlanosController:
 
         dialog = DialogBase("➕  Novo Plano", parent=self.ui)
 
-        def _campo(label_txt, placeholder, idx):
-            lbl = QLabel(label_txt)
+        def _campo(lbl_txt, ph, idx):
+            lbl = QLabel(lbl_txt)
             lbl.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
             inp = QLineEdit()
-            inp.setPlaceholderText(placeholder)
+            inp.setPlaceholderText(ph)
             inp.setFixedHeight(36)
             inp.setStyleSheet(dialog._estilo_input())
             dialog._layout_corpo.insertWidget(idx * 2, lbl)
@@ -212,13 +207,13 @@ class PlanosController:
             if not nome:
                 lbl_aviso.setText("⚠️  Informe o nome do plano.")
                 return
-
-            modulos_sel = [mid for mid, cb in checks.items() if cb.isChecked()]
-
             self._dialog_ref = dialog
             self._lbl_ref = lbl_aviso
-
-            self.worker.salvar(nome, inp_desc.text(), modulos_sel)
+            self.worker.salvar(
+                nome,
+                inp_desc.text(),
+                [mid for mid, cb in checks.items() if cb.isChecked()],
+            )
 
         dialog._btn_confirmar.clicked.connect(_salvar)
         dialog.exec()
@@ -235,8 +230,8 @@ class PlanosController:
 
         dialog = DialogBase("✏️  Editar Plano", parent=self.ui)
 
-        def _campo(label_txt, valor, idx):
-            lbl = QLabel(label_txt)
+        def _campo(lbl_txt, valor, idx):
+            lbl = QLabel(lbl_txt)
             lbl.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
             inp = QLineEdit(valor)
             inp.setFixedHeight(36)
@@ -278,10 +273,12 @@ class PlanosController:
             checks[m["id"]] = cb
 
         def _salvar():
-            checks_estado = {mid: cb.isChecked() for mid, cb in checks.items()}
-
             self._dialog_ref = dialog
-            self.worker.atualizar_modulos(plano_id, checks_estado, modulos_atuais)
+            self.worker.atualizar_modulos(
+                plano_id,
+                {mid: cb.isChecked() for mid, cb in checks.items()},
+                modulos_atuais,
+            )
 
         dialog._btn_confirmar.clicked.connect(_salvar)
         dialog.exec()
@@ -294,26 +291,20 @@ class PlanosController:
         from telas.dialogs import DialogBase
 
         dialog = DialogBase("🗑️  Excluir Plano", parent=self.ui)
-
         lbl = QLabel("Tem certeza que deseja excluir este plano?")
         lbl.setStyleSheet("color: #ccc; font-size: 12px;")
         dialog._layout_corpo.insertWidget(0, lbl)
+        dialog._btn_confirmar.setText("Excluir")
+        dialog._btn_confirmar.setStyleSheet(
+            """
+            QPushButton { background-color: #dc2626; color: white;
+                border-radius: 6px; padding: 6px 12px; }
+        """
+        )
 
         def _confirmar():
             self._dialog_ref = dialog
             self.worker.excluir(plano_id)
-
-        dialog._btn_confirmar.setText("Excluir")
-        dialog._btn_confirmar.setStyleSheet(
-            """
-            QPushButton {
-                background-color: #dc2626;
-                color: white;
-                border-radius: 6px;
-                padding: 6px 12px;
-            }
-        """
-        )
 
         dialog._btn_confirmar.clicked.connect(_confirmar)
         dialog.exec()

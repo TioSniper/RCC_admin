@@ -73,9 +73,10 @@ class DashboardController:
         self.worker.dados_prontos.connect(self._atualizar_ui)
 
         if realtime:
-            realtime.solicitacoes_mudou.connect(self._carregar)
-            realtime.usuarios_mudou.connect(self._carregar)
-            realtime.assinaturas_mudou.connect(self._carregar)
+            # aceita payload mas ignora — dashboard sempre re-fetch completo
+            realtime.solicitacoes_mudou.connect(lambda _: self._carregar())
+            realtime.usuarios_mudou.connect(lambda _: self._carregar())
+            realtime.assinaturas_mudou.connect(lambda _: self._carregar())
 
         self.ui.btn_atualizar.clicked.connect(self._carregar)
         self._carregar()
@@ -222,15 +223,13 @@ class DashboardController:
         def _salvar():
             try:
                 dias = int(inp_dias.text().strip())
-                if dias < 0:  # 0 = sem expiração, permitido
+                if dias < 0:
                     raise ValueError
             except ValueError:
                 lbl_aviso.setText("⚠️  Informe um número válido (0 = sem expiração).")
                 return
-
             dialog._btn_confirmar.setEnabled(False)
             dialog._btn_confirmar.setText("Aprovando...")
-
             w = AprovacaoWorker(sol_id, username, dias)
             self._workers.append(w)
             w.sucesso.connect(lambda _: (dialog.accept(), self._workers.clear()))

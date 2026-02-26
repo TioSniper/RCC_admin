@@ -1,5 +1,4 @@
 import os
-from PyQt6.QtCore import Qt
 
 
 class LoginController:
@@ -18,7 +17,7 @@ class LoginController:
 
     def _fazer_login(self):
         usuario = self.ui.input_usuario.text().strip()
-        senha   = self.ui.input_senha.text().strip()
+        senha = self.ui.input_senha.text().strip()
 
         if not usuario or not senha:
             self.ui.lbl_aviso.setText("⚠️  Preencha usuário e senha.")
@@ -26,7 +25,6 @@ class LoginController:
 
         senha_master = os.getenv("ADMIN_SENHA_MASTER", "")
 
-        # Valida credenciais master
         if usuario != "admin" or senha != senha_master:
             self.ui.lbl_aviso.setText("⚠️  Usuário ou senha incorretos.")
             self.ui.input_senha.clear()
@@ -37,8 +35,15 @@ class LoginController:
     def _abrir_painel(self):
         from telas.principal.principal_ui import PrincipalUI
         from telas.principal.principal_controller import PrincipalController
+        from utils.admin_realtime import iniciar_realtime
+        from config import (
+            SUPABASE_URL,
+            SUPABASE_SERVICE_KEY,
+        )  # ajuste o import conforme seu projeto
+
+        realtime = iniciar_realtime(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
         self.janela_principal = PrincipalUI()
-        self.controller_principal = PrincipalController(self.janela_principal)
+        self.controller_principal = PrincipalController(self.janela_principal, realtime)
         self.janela_principal.show()
         self.ui.close()
