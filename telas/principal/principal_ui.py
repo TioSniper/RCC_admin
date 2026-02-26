@@ -19,7 +19,6 @@ MENU_ITENS = [
     {"id": "assinaturas", "emoji": "📋", "nome": "Assinaturas"},
     {"id": "planos", "emoji": "🎯", "nome": "Planos"},
     {"id": "modulos", "emoji": "🧩", "nome": "Módulos"},
-    {"id": "acessos", "emoji": "🔑", "nome": "Acessos Extras"},
     {"id": "logs", "emoji": "📝", "nome": "Logs"},
 ]
 

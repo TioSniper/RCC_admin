@@ -53,7 +53,7 @@ class DashboardUI(TelaBase):
         layout_cards.setSpacing(16)
 
         self.card_usuarios = CardResumo("👥", "Total de Usuários", "—", "#FFD700")
-        self.card_ativos = CardResumo("✅", "Usuários Ativos", "—", "#00ff88")
+        self.card_ativos = CardResumo("🟢", "Usuários Online", "—", "#00ff88")
         self.card_assinaturas = CardResumo("📋", "Assinaturas Ativas", "—", "#4da6ff")
         self.card_expirando = CardResumo("⚠️", "Expirando em 7 dias", "—", "#ffaa00")
         self.card_expiradas = CardResumo("❌", "Assinaturas Expiradas", "—", "#ff5c5c")

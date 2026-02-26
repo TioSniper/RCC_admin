@@ -13,6 +13,7 @@ class AdminRealtime(QObject):
     planos_mudou = pyqtSignal(dict)
     modulos_mudou = pyqtSignal(dict)
     sessoes_mudou = pyqtSignal(dict)
+    planos_modulos_mudou = pyqtSignal(dict)
 
     # Sinal interno por tabela — emitido da thread asyncio, dispara timer na thread principal
     _evento_recebido = pyqtSignal(str)
@@ -26,6 +27,7 @@ class AdminRealtime(QObject):
         "planos": "planos_mudou",
         "modulos": "modulos_mudou",
         "sessoes_ativas": "sessoes_mudou",
+        "planos_modulos": "planos_modulos_mudou",
     }
 
     def __init__(self, supabase_url: str, supabase_key: str, anon_key: str = ""):

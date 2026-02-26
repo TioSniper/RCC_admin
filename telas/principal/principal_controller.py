@@ -11,10 +11,9 @@ from telas.planos.planos_ui import PlanosUI
 from telas.planos.planos_controller import PlanosController
 from telas.modulos.modulos_ui import ModulosUI
 from telas.modulos.modulos_controller import ModulosController
-from telas.acessos.acessos_ui import AcessosUI
-from telas.acessos.acessos_controller import AcessosController
 from telas.logs.logs_ui import LogsUI
 from telas.logs.logs_controller import LogsController
+from utils.cache_store import obter_store
 
 
 class PrincipalController:
@@ -23,21 +22,45 @@ class PrincipalController:
         self.ui = ui
         self._realtime = realtime
         self._paginas = {}
+
+        # ── Inicializa store e conecta Realtime ────────────────
+        self._store = obter_store()
+        self._conectar_realtime_ao_store()
+
+        # ── Carrega dados (todas as queries em paralelo) ───────
+        self._store.carregar_tudo()
+
         self._carregar_paginas()
         self._conectar_eventos()
         self._ir_para("dashboard")
 
+    def _conectar_realtime_ao_store(self):
+        """Realtime atualiza o store — store notifica os controllers via sinais."""
+        if not self._realtime:
+            return
+        rt = self._realtime
+        s = self._store
+
+        rt.usuarios_mudou.connect(s.on_usuario_mudou)
+        rt.assinaturas_mudou.connect(s.on_assinatura_mudou)
+        rt.sessoes_mudou.connect(s.on_sessao_mudou)
+        rt.planos_mudou.connect(s.on_plano_mudou)
+        rt.modulos_mudou.connect(s.on_modulo_mudou)
+        rt.planos_modulos_mudou.connect(s.on_planos_modulos_mudou)
+        rt.solicitacoes_mudou.connect(s.on_solicitacao_mudou)
+        rt.logs_mudou.connect(s.on_log_mudou)
+
     def _carregar_paginas(self):
+        s = self._store
         rt = self._realtime
 
         paginas = {
-            "dashboard": (DashboardUI, lambda ui: DashboardController(ui, rt)),
-            "usuarios": (UsuariosUI, lambda ui: UsuariosController(ui, rt)),
-            "assinaturas": (AssinaturasUI, lambda ui: AssinaturasController(ui, rt)),
-            "planos": (PlanosUI, lambda ui: PlanosController(ui, rt)),
-            "modulos": (ModulosUI, lambda ui: ModulosController(ui, rt)),
-            "acessos": (AcessosUI, lambda ui: AcessosController(ui, rt)),
-            "logs": (LogsUI, lambda ui: LogsController(ui, rt)),
+            "dashboard": (DashboardUI, lambda ui: DashboardController(ui, s)),
+            "usuarios": (UsuariosUI, lambda ui: UsuariosController(ui, s)),
+            "assinaturas": (AssinaturasUI, lambda ui: AssinaturasController(ui, s)),
+            "planos": (PlanosUI, lambda ui: PlanosController(ui, s, rt)),
+            "modulos": (ModulosUI, lambda ui: ModulosController(ui, s, rt)),
+            "logs": (LogsUI, lambda ui: LogsController(ui, s)),
         }
 
         self._controllers = {}
@@ -68,7 +91,6 @@ class PrincipalController:
 
     def _toggle_menu(self):
         expandido = self.ui.menu_lateral.width() > 60
-
         if expandido:
             self.ui.menu_lateral.setFixedWidth(60)
             self.ui.btn_toggle_menu.setText("▶")

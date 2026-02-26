@@ -9,163 +9,56 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QComboBox,
 )
-from PyQt6.QtCore import Qt, QObject, pyqtSignal
+from PyQt6.QtCore import Qt
 from utils.supabase_admin import (
-    listar_usuarios,
-    listar_sessoes_ativas,
-    criar_usuario,
     ativar_usuario,
     desativar_usuario,
     resetar_senha,
     deletar_usuario,
     listar_planos,
     criar_assinatura,
+    criar_usuario,
 )
-
-
-class UsuariosWorker(QObject):
-    dados_prontos = pyqtSignal(list, set)
-
-    def buscar(self):
-        threading.Thread(target=self._run, daemon=True).start()
-
-    def _run(self):
-        self.dados_prontos.emit(listar_usuarios(), listar_sessoes_ativas())
 
 
 class UsuariosController:
 
-    def __init__(self, ui, realtime=None):
+    def __init__(self, ui, store):
         self.ui = ui
-        self._todos = []
-        self._online = set()
-        self.worker = UsuariosWorker()
-        self.worker.dados_prontos.connect(self._preencher_tabela)
+        self._store = store
 
-        if realtime:
-            # Recebe payload — atualiza só a linha afetada quando possível
-            realtime.usuarios_mudou.connect(self._on_usuario_mudou)
-            realtime.assinaturas_mudou.connect(self._on_assinatura_mudou)
-            realtime.sessoes_mudou.connect(self._on_sessao_mudou)
+        # Conecta sinais do store
+        store.usuarios_atualizados.connect(self._renderizar)
+        store.sessoes_atualizadas.connect(self._renderizar)
+        store.carregamento_completo.connect(self._renderizar)
 
         self._conectar_eventos()
-        self._carregar()
+
+        # Se store já tem dados, renderiza imediato
+        if store.usuarios:
+            self._renderizar()
 
     def _conectar_eventos(self):
-        self.ui.btn_refresh.clicked.connect(self._carregar)
+        self.ui.btn_refresh.clicked.connect(lambda: self._store.carregar_tudo())
         self.ui.btn_novo.clicked.connect(self._dialog_novo_usuario)
         self.ui.input_busca.textChanged.connect(self._filtrar)
 
-    # ── Handlers Realtime — cirúrgicos ────────────────────────
-
-    def _on_usuario_mudou(self, payload: dict):
-        tipo = payload.get("type")
-        record = payload.get("record", {})
-        uid = record.get("id")
-
-        if tipo == "DELETE":
-            # Remove da lista local sem re-fetch
-            self._todos = [
-                u
-                for u in self._todos
-                if u.get("id") != payload.get("old_record", {}).get("id")
-            ]
-            self._preencher_tabela(self._todos, self._online)
-            return
-
-        if tipo in ("INSERT", "UPDATE") and uid:
-            # Atualiza/insere só este usuário
-            existente = next((u for u in self._todos if u.get("id") == uid), None)
-            if existente:
-                existente.update(record)
-            else:
-                record.setdefault("assinatura", None)
-                self._todos.insert(0, record)
-            self._preencher_tabela(self._todos, self._online)
-            return
-
-        # Fallback: re-fetch completo
-        self._carregar()
-
-    def _on_assinatura_mudou(self, payload: dict):
-        record = payload.get("record", {})
-        uid = record.get("user_id")
-        if not uid:
-            self._carregar()
-            return
-
-        # Atualiza só o campo assinatura do usuário afetado
-        for u in self._todos:
-            if u.get("id") == uid:
-                u["assinatura"] = record if record.get("ativo") else None
-                break
-        self._preencher_tabela(self._todos, self._online)
-
-    def _on_sessao_mudou(self, payload: dict):
-        tipo = payload.get("type")
-        record = payload.get("record", {})
-        uid = record.get("user_id") or payload.get("old_record", {}).get("user_id")
-        if not uid:
-            return
-
-        if tipo == "DELETE" or not record:
-            self._online.discard(uid)
-        else:
-            self._online.add(uid)
-
-        # Atualiza só a célula de status deste usuário
-        self._atualizar_status_linha(uid)
-
-    def _atualizar_status_linha(self, uid: str):
-        """Atualiza só a coluna status do usuário sem redesenhar a tabela toda."""
-        tabela = self.ui.tabela
-        for row in range(tabela.rowCount()):
-            item = tabela.item(row, 0)
-            if not item:
-                continue
-            # Encontra o usuário pelo username na linha
-            usuario = next(
-                (u for u in self._todos if u.get("username") == item.text()), None
-            )
-            if not usuario or usuario.get("id") != uid:
-                continue
-
-            ativo = usuario.get("ativo", False)
-            esta_online = uid in self._online
-
-            if esta_online:
-                txt, cor = "🟢 Online", Qt.GlobalColor.green
-            elif ativo:
-                txt, cor = "✅ Ativo", Qt.GlobalColor.darkGreen
-            else:
-                txt, cor = "❌ Inativo", Qt.GlobalColor.red
-
-            status_item = QTableWidgetItem(txt)
-            status_item.setForeground(cor)
-            status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            tabela.setItem(row, 2, status_item)
-            break
-
-    # ── Carregamento completo (inicial ou fallback) ────────────
-
-    def _carregar(self):
-        self.worker.buscar()
-
     def _filtrar(self, texto: str):
         if not texto:
-            self._preencher_tabela(self._todos, self._online)
+            self._renderizar()
             return
         filtrados = [
             u
-            for u in self._todos
+            for u in self._store.usuarios
             if texto.lower() in (u.get("username") or "").lower()
             or texto.lower() in (u.get("email") or "").lower()
         ]
-        self._preencher_tabela(filtrados, self._online)
+        self._renderizar(filtrados)
 
-    def _preencher_tabela(self, usuarios: list, online: set):
-        self._todos = usuarios
-        self._online = online
+    def _renderizar(self, usuarios=None):
+        if usuarios is None:
+            usuarios = self._store.usuarios
+        online = self._store.sessoes
         tabela = self.ui.tabela
         tabela.setRowCount(0)
 
@@ -227,11 +120,9 @@ class UsuariosController:
                 b.setCursor(Qt.CursorShape.PointingHandCursor)
                 b.setStyleSheet(
                     f"""
-                    QPushButton {{
-                        background-color: {cor}; color: white;
+                    QPushButton {{ background-color: {cor}; color: white;
                         border-radius: 5px; font-size: 11px;
-                        border: none; padding: 0 8px;
-                    }}
+                        border: none; padding: 0 8px; }}
                 """
                 )
                 return b
@@ -259,10 +150,7 @@ class UsuariosController:
 
     def _toggle_usuario(self, user_id: str, ativo: bool):
         def _run():
-            if ativo:
-                desativar_usuario(user_id)
-            else:
-                ativar_usuario(user_id)
+            desativar_usuario(user_id) if ativo else ativar_usuario(user_id)
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -289,10 +177,7 @@ class UsuariosController:
                 lbl_aviso.setText("⚠️  Mínimo 6 caracteres.")
                 return
             ok, _ = resetar_senha(user_id, nova)
-            if ok:
-                dialog.accept()
-            else:
-                lbl_aviso.setText("⚠️  Erro ao resetar senha.")
+            dialog.accept() if ok else lbl_aviso.setText("⚠️  Erro ao resetar senha.")
 
         dialog._btn_confirmar.clicked.connect(_salvar)
         dialog.exec()
@@ -344,7 +229,7 @@ class UsuariosController:
         """
         )
         combo.addItem("Sem plano", None)
-        for p in listar_planos():
+        for p in self._store.planos:
             combo.addItem(p["nome"], p["id"])
 
         lbl_dias = QLabel("Dias de acesso (0 = sem expiração):")
@@ -379,7 +264,6 @@ class UsuariosController:
             if len(senha) < 6:
                 lbl_aviso.setText("⚠️  Senha mínima de 6 caracteres.")
                 return
-
             ok, resultado = criar_usuario(username, senha)
             if not ok:
                 lbl_aviso.setText(f"⚠️  {resultado}")

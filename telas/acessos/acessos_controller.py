@@ -10,53 +10,68 @@ from PyQt6.QtWidgets import (
     QComboBox,
 )
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
-from utils.supabase_admin import (
-    listar_acessos_extras,
-    dar_acesso_extra,
-    revogar_acesso_extra,
-    listar_usuarios,
-    listar_modulos,
-)
+from utils.supabase_admin import dar_acesso_extra, revogar_acesso_extra
 
 
-class AcessosWorker(QObject):
-    dados_prontos = pyqtSignal(list)
+class AcessosMutWorker(QObject):
+    sucesso = pyqtSignal()
+    erro = pyqtSignal(str)
 
-    def buscar(self):
+    def __init__(self, fn, *args):
+        super().__init__()
+        self._fn = fn
+        self._args = args
+
+    def executar(self):
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
-        self.dados_prontos.emit(listar_acessos_extras())
+        try:
+            ok, msg = self._fn(*self._args)
+            self.sucesso.emit() if ok else self.erro.emit(msg)
+        except Exception as e:
+            self.erro.emit(str(e))
 
 
 class AcessosController:
 
-    def __init__(self, ui, realtime=None):
+    def __init__(self, ui, store, realtime=None):
         self.ui = ui
-        self.worker = AcessosWorker()
-        self.worker.dados_prontos.connect(self._preencher)
+        self._store = store
+        self._workers = []
+
+        # Acessos extras não têm cache próprio no store ainda —
+        # usam sinal genérico de assinaturas ou recarregam pelo btn
+        # Se quiser cache, basta adicionar self._store.acessos e on_acesso_mudou
+        store.carregamento_completo.connect(self._renderizar)
 
         if realtime:
-            realtime.acessos_mudou.connect(self._carregar)
+            realtime.acessos_mudou.connect(lambda _: self._recarregar())
 
         self._conectar_eventos()
-        self._carregar()
+        self._recarregar()
 
     def _conectar_eventos(self):
-        self.ui.btn_refresh.clicked.connect(self._carregar)
+        self.ui.btn_refresh.clicked.connect(self._recarregar)
         self.ui.btn_novo.clicked.connect(self._dialog_novo_acesso)
 
-    def _carregar(self):
-        self.worker.buscar()
+    def _recarregar(self):
+        """Acessos extras têm expiração em horas — recarrega do banco."""
+        from utils.supabase_admin import listar_acessos_extras
+
+        threading.Thread(
+            target=lambda: self._preencher(listar_acessos_extras()), daemon=True
+        ).start()
+
+    def _renderizar(self):
+        self._recarregar()
 
     def _preencher(self, acessos: list):
         tabela = self.ui.tabela
         tabela.setRowCount(0)
-
         for a in acessos:
             row = tabela.rowCount()
             tabela.insertRow(row)
-
             username = a.get("username", "—")
             modulo = a.get("modulo_nome", "—")
             acesso_id = a.get("id", "")
@@ -87,24 +102,20 @@ class AcessosController:
             w = QWidget()
             l = QHBoxLayout(w)
             l.setContentsMargins(4, 2, 4, 2)
-
-            btn_revogar = QPushButton("Revogar")
-            btn_revogar.setFixedHeight(26)
-            btn_revogar.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn_revogar.setStyleSheet(
-                """
-                QPushButton {
+            btn = QPushButton("Revogar")
+            btn.setFixedHeight(26)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(
+                """QPushButton {
                     background-color: #dc2626; color: white;
                     border-radius: 5px; font-size: 11px;
                     border: none; padding: 0 8px;
-                }
-            """
+                }"""
             )
-            btn_revogar.clicked.connect(
+            btn.clicked.connect(
                 lambda _, aid=acesso_id, uid=user_id: self._confirmar_revogar(aid, uid)
             )
-
-            l.addWidget(btn_revogar)
+            l.addWidget(btn)
             l.addStretch()
             tabela.setCellWidget(row, 4, w)
             tabela.setRowHeight(row, 40)
@@ -114,25 +125,21 @@ class AcessosController:
 
         dialog = DialogBase("➕  Novo Acesso Extra", parent=self.ui)
 
-        estilo_combo = """
-            QComboBox {
-                background-color: rgba(255,255,255,0.05);
-                border: 1px solid #2a3f7a; border-radius: 8px;
-                color: white; padding: 0 12px; font-size: 12px;
-            }
-            QComboBox::drop-down { border: none; }
-            QComboBox QAbstractItemView {
-                background-color: #1a2854; color: white;
-                border: 1px solid #FFD700;
-            }
-        """
+        estilo_combo = (
+            "QComboBox { background-color: rgba(255,255,255,0.05); "
+            "border: 1px solid #2a3f7a; border-radius: 8px; "
+            "color: white; padding: 0 12px; font-size: 12px; }"
+            "QComboBox::drop-down { border: none; }"
+            "QComboBox QAbstractItemView { background-color: #1a2854; "
+            "color: white; border: 1px solid #FFD700; }"
+        )
 
         lbl_user = QLabel("Usuário:")
         lbl_user.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
         combo_user = QComboBox()
         combo_user.setFixedHeight(36)
         combo_user.setStyleSheet(estilo_combo)
-        for u in listar_usuarios():
+        for u in self._store.usuarios:
             combo_user.addItem(u.get("username", u["id"]), u["id"])
 
         lbl_mod = QLabel("Módulo:")
@@ -140,7 +147,7 @@ class AcessosController:
         combo_mod = QComboBox()
         combo_mod.setFixedHeight(36)
         combo_mod.setStyleSheet(estilo_combo)
-        for m in listar_modulos():
+        for m in self._store.modulos:
             combo_mod.addItem(m["nome"], m["id"])
 
         lbl_horas = QLabel("Duração em horas:")
@@ -148,14 +155,13 @@ class AcessosController:
         inp_horas = QLineEdit("24")
         inp_horas.setFixedHeight(36)
         inp_horas.setStyleSheet(dialog._estilo_input())
-
         lbl_aviso = QLabel("")
         lbl_aviso.setStyleSheet("color: #ff5c5c; font-size: 11px;")
 
-        for i, w in enumerate(
+        for i, wg in enumerate(
             [lbl_user, combo_user, lbl_mod, combo_mod, lbl_horas, inp_horas, lbl_aviso]
         ):
-            dialog._layout_corpo.insertWidget(i, w)
+            dialog._layout_corpo.insertWidget(i, wg)
 
         def _salvar():
             try:
@@ -165,18 +171,26 @@ class AcessosController:
             except ValueError:
                 lbl_aviso.setText("⚠️  Informe um número válido de horas.")
                 return
-
-            def _run():
-                ok, msg = dar_acesso_extra(
-                    combo_user.currentData(), combo_mod.currentData(), horas
+            dialog._btn_confirmar.setEnabled(False)
+            dialog._btn_confirmar.setText("Salvando...")
+            w = AcessosMutWorker(
+                dar_acesso_extra,
+                combo_user.currentData(),
+                combo_mod.currentData(),
+                horas,
+            )
+            self._workers.append(w)
+            w.sucesso.connect(
+                lambda: (dialog.accept(), self._recarregar(), self._workers.clear())
+            )
+            w.erro.connect(
+                lambda msg: (
+                    lbl_aviso.setText(f"⚠️  {msg}"),
+                    dialog._btn_confirmar.setEnabled(True),
+                    dialog._btn_confirmar.setText("✓  Confirmar"),
                 )
-                if ok:
-                    dialog.accept()
-                    self._carregar()
-                else:
-                    lbl_aviso.setText(f"⚠️  {msg}")
-
-            threading.Thread(target=_run, daemon=True).start()
+            )
+            w.executar()
 
         dialog._btn_confirmar.clicked.connect(_salvar)
         dialog.exec()
@@ -187,12 +201,10 @@ class AcessosController:
         if DialogConfirmacao(
             "Deseja revogar este acesso extra?", parent=self.ui
         ).exec():
-
-            def _run():
-                revogar_acesso_extra(acesso_id, user_id)
-                self._carregar()
-
-            threading.Thread(target=_run, daemon=True).start()
+            w = AcessosMutWorker(revogar_acesso_extra, acesso_id, user_id)
+            self._workers.append(w)
+            w.sucesso.connect(lambda: (self._recarregar(), self._workers.clear()))
+            w.executar()
 
     def _item(self, texto: str) -> QTableWidgetItem:
         item = QTableWidgetItem(str(texto))

@@ -1,53 +1,41 @@
-import threading
 import json
 from datetime import datetime
 from PyQt6.QtWidgets import QTableWidgetItem
-from PyQt6.QtCore import Qt, QObject, pyqtSignal
-from utils.supabase_admin import listar_logs
-
-
-class LogsWorker(QObject):
-    dados_prontos = pyqtSignal(list)
-
-    def buscar(self):
-        threading.Thread(target=self._run, daemon=True).start()
-
-    def _run(self):
-        self.dados_prontos.emit(listar_logs(200))
+from PyQt6.QtCore import Qt
 
 
 class LogsController:
 
-    def __init__(self, ui, realtime=None):
+    def __init__(self, ui, store):
         self.ui = ui
+        self._store = store
         self._todos = []
-        self.worker = LogsWorker()
-        self.worker.dados_prontos.connect(self._preencher)
 
-        if realtime:
-            realtime.logs_mudou.connect(lambda _: self._carregar())
+        store.logs_atualizados.connect(self._renderizar)
+        store.carregamento_completo.connect(self._renderizar)
 
-        self.ui.btn_refresh.clicked.connect(self._carregar)
+        self.ui.btn_refresh.clicked.connect(lambda: self._store.carregar_tudo())
         self.ui.input_busca.textChanged.connect(self._filtrar)
-        self._carregar()
 
-    def _carregar(self):
-        self.worker.buscar()
+        if store.logs:
+            self._renderizar()
 
     def _filtrar(self, texto: str):
         if not texto:
-            self._preencher(self._todos)
+            self._preencher(self._store.logs)
             return
         filtrados = [
             l
-            for l in self._todos
+            for l in self._store.logs
             if texto.lower() in l.get("acao", "").lower()
             or texto.lower() in (l.get("username") or "").lower()
         ]
         self._preencher(filtrados)
 
+    def _renderizar(self):
+        self._preencher(self._store.logs)
+
     def _preencher(self, logs: list):
-        self._todos = logs
         t = self.ui.tabela
         t.setRowCount(0)
         for l in logs:

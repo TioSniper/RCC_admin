@@ -10,15 +10,8 @@ from PyQt6.QtWidgets import (
     QComboBox,
 )
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
-from utils.supabase_admin import (
-    listar_assinaturas,
-    renovar_assinatura,
-    revogar_assinatura,
-    mudar_plano,
-    listar_planos,
-    listar_usuarios,
-    criar_assinatura,
-)
+import os, threading
+from utils.supabase_admin import renovar_assinatura
 
 
 class AssWorker(QObject):
@@ -41,65 +34,95 @@ class AssWorker(QObject):
             self.erro.emit(str(e))
 
 
-class AssinaturasWorker(QObject):
-    dados_prontos = pyqtSignal(list, list)
+class _RpcWorker(QObject):
+    """Executa RPC em thread e emite sinais de volta na thread principal."""
 
-    def buscar(self):
+    sucesso = pyqtSignal()
+    erro = pyqtSignal(str)
+
+    def __init__(self, nome, params):
+        super().__init__()
+        self._nome = nome
+        self._params = params
+
+    def executar(self):
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
-        self.dados_prontos.emit(listar_assinaturas(), listar_usuarios())
+        try:
+            from supabase import create_client
+            from dotenv import load_dotenv
+
+            load_dotenv()
+            cli = create_client(
+                os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY")
+            )
+            cli.rpc(self._nome, self._params).execute()
+            self.sucesso.emit()
+        except Exception as e:
+            self.erro.emit(str(e))
+
+
+def _chamar_rpc(nome: str, params: dict, callback_ok, callback_err):
+    """Chama uma RPC do Supabase em thread separada, callbacks na thread principal."""
+    w = _RpcWorker(nome, params)
+    w.sucesso.connect(callback_ok)
+    w.erro.connect(callback_err)
+    w.executar()
+    return w  # mantém referência viva
 
 
 class AssinaturasController:
 
-    def __init__(self, ui, realtime=None):
+    def __init__(self, ui, store):
         self.ui = ui
-        self._todos = []
-        self._usuarios = []
+        self._store = store
         self._workers = []
-        self.worker = AssinaturasWorker()
-        self.worker.dados_prontos.connect(self._preencher)
 
-        if realtime:
-            # lambda _: ignora o payload e faz re-fetch
-            realtime.assinaturas_mudou.connect(lambda _: self._carregar())
-            realtime.usuarios_mudou.connect(lambda _: self._carregar())
+        # Debounce de 300ms — agrupa eventos rápidos (UPDATE + INSERT)
+        # evitando o pisca de "sem assinatura" entre os dois eventos
+        from PyQt6.QtCore import QTimer
+
+        self._timer_render = QTimer()
+        self._timer_render.setSingleShot(True)
+        self._timer_render.setInterval(300)
+        self._timer_render.timeout.connect(self._renderizar)
+
+        store.assinaturas_atualizadas.connect(self._timer_render.start)
+        store.carregamento_completo.connect(self._renderizar)
 
         self._conectar_eventos()
-        self._carregar()
+        if store.assinaturas:
+            self._renderizar()
 
     def _conectar_eventos(self):
-        self.ui.btn_refresh.clicked.connect(self._carregar)
+        self.ui.btn_refresh.clicked.connect(lambda: self._store.carregar_tudo())
         self.ui.input_busca.textChanged.connect(self._filtrar)
-
-    def _carregar(self):
-        self.worker.buscar()
 
     def _filtrar(self, texto: str):
         if not texto:
-            self._preencher(self._todos, self._usuarios)
+            self._renderizar()
             return
         ass_f = [
-            a for a in self._todos if texto.lower() in (a.get("username") or "").lower()
+            a
+            for a in self._store.assinaturas
+            if texto.lower() in (a.get("username") or "").lower()
         ]
         sem_f = [
             u
-            for u in self._sem_assinatura(self._todos, self._usuarios)
+            for u in self._sem_assinatura()
             if texto.lower() in (u.get("username") or "").lower()
         ]
-        self._renderizar(ass_f, sem_f)
+        self._renderizar_dados(ass_f, sem_f)
 
-    def _sem_assinatura(self, assinaturas, usuarios):
-        ids = {a.get("user_id") for a in assinaturas}
-        return [u for u in usuarios if u["id"] not in ids]
+    def _sem_assinatura(self):
+        ids = {a.get("user_id") for a in self._store.assinaturas}
+        return [u for u in self._store.usuarios if u["id"] not in ids]
 
-    def _preencher(self, assinaturas, usuarios):
-        self._todos = assinaturas
-        self._usuarios = usuarios
-        self._renderizar(assinaturas, self._sem_assinatura(assinaturas, usuarios))
+    def _renderizar(self):
+        self._renderizar_dados(self._store.assinaturas, self._sem_assinatura())
 
-    def _renderizar(self, assinaturas, sem_assinatura):
+    def _renderizar_dados(self, assinaturas, sem_assinatura):
         tabela = self.ui.tabela
         tabela.setRowCount(0)
         for a in assinaturas:
@@ -170,27 +193,25 @@ class AssinaturasController:
             b.setFixedHeight(26)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setStyleSheet(
-                f"""
-                QPushButton {{ background-color: {cor}; color: white;
+                f"""QPushButton {{
+                    background-color: {cor}; color: white;
                     border-radius: 5px; font-size: 11px;
-                    border: none; padding: 0 8px; }}
-            """
+                    border: none; padding: 0 8px;
+                }}"""
             )
             return b
 
         btn_renovar = _btn("Renovar", "#16a34a")
         btn_plano = _btn("Plano", "#2563eb")
-        btn_revogar = _btn("Revogar", "#dc2626")
-
+        btn_basico = _btn("→ Básico", "#dc2626")
         btn_renovar.clicked.connect(lambda _, uid=user_id: self._dialog_renovar(uid))
         btn_plano.clicked.connect(lambda _, uid=user_id: self._dialog_mudar_plano(uid))
-        btn_revogar.clicked.connect(
-            lambda _, uid=user_id, u=username: self._confirmar_revogar(uid, u)
+        btn_basico.clicked.connect(
+            lambda _, uid=user_id, u=username: self._revogar_para_basico(uid, u)
         )
-
         l.addWidget(btn_renovar)
         l.addWidget(btn_plano)
-        l.addWidget(btn_revogar)
+        l.addWidget(btn_basico)
         l.addStretch()
         tabela.setCellWidget(row, 6, w)
         tabela.setRowHeight(row, 40)
@@ -198,7 +219,6 @@ class AssinaturasController:
     def _row_sem_ass(self, tabela, row, u):
         username = u.get("username") or "—"
         user_id = u["id"]
-
         tabela.setItem(row, 0, self._item(username))
         tabela.setItem(row, 1, self._item("Sem plano"))
         item_s = QTableWidgetItem("— Sem assinatura")
@@ -207,7 +227,6 @@ class AssinaturasController:
         tabela.setItem(row, 2, item_s)
         for col in [3, 4, 5]:
             tabela.setItem(row, col, self._item("—"))
-
         w = QWidget()
         l = QHBoxLayout(w)
         l.setContentsMargins(4, 2, 4, 2)
@@ -215,11 +234,9 @@ class AssinaturasController:
         btn.setFixedHeight(26)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setStyleSheet(
-            """
-            QPushButton { background-color: #7c3aed; color: white;
-                border-radius: 5px; font-size: 11px; border: none; padding: 0 8px; }
-            QPushButton:hover { background-color: #6d28d9; }
-        """
+            "QPushButton { background-color: #7c3aed; color: white; "
+            "border-radius: 5px; font-size: 11px; border: none; padding: 0 8px; }"
+            "QPushButton:hover { background-color: #6d28d9; }"
         )
         btn.clicked.connect(
             lambda _, uid=user_id, un=username: self._dialog_atribuir(uid, un)
@@ -229,32 +246,57 @@ class AssinaturasController:
         tabela.setCellWidget(row, 6, w)
         tabela.setRowHeight(row, 40)
 
+    def _estilo_combo(self):
+        return (
+            "QComboBox { background-color: rgba(255,255,255,0.05); border: 1px solid #2a3f7a; "
+            "border-radius: 8px; color: white; padding: 0 12px; font-size: 12px; }"
+            "QComboBox::drop-down { border: none; }"
+            "QComboBox QAbstractItemView { background-color: #1a2854; color: white; border: 1px solid #FFD700; }"
+        )
+
     def _dialog_atribuir(self, user_id: str, username: str):
+        import os
         from telas.dialogs import DialogBase
 
+        BASICO_ID = os.getenv("PLANO_BASICO_ID", "11111111-1111-1111-1111-111111111111")
+
         dialog = DialogBase("🎯  Atribuir Plano", parent=self.ui)
+
         lbl_info = QLabel(f"Usuário: <b style='color:#FFD700'>{username}</b>")
         lbl_info.setStyleSheet("color: #cccccc; font-size: 12px;")
+
         lbl_plano = QLabel("Selecione o plano:")
         lbl_plano.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
+
         combo = QComboBox()
         combo.setFixedHeight(36)
         combo.setStyleSheet(self._estilo_combo())
-        for p in listar_planos():
-            combo.addItem(p["nome"], p["id"])
+        for p in self._store.planos:
+            if p["id"] != BASICO_ID:
+                combo.addItem(p["nome"], p["id"])
+
         lbl_dias = QLabel("Dias de acesso (0 = sem expiração):")
         lbl_dias.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
-        inp_dias = QLineEdit("0")
+
+        inp_dias = QLineEdit("30")
         inp_dias.setFixedHeight(36)
         inp_dias.setStyleSheet(dialog._estilo_input())
+
         lbl_aviso = QLabel("")
         lbl_aviso.setStyleSheet("color: #ff5c5c; font-size: 11px;")
-        for i, wg in enumerate(
-            [lbl_info, lbl_plano, combo, lbl_dias, inp_dias, lbl_aviso]
-        ):
-            dialog._layout_corpo.insertWidget(i, wg)
+
+        dialog._layout_corpo.insertWidget(0, lbl_info)
+        dialog._layout_corpo.insertWidget(1, lbl_plano)
+        dialog._layout_corpo.insertWidget(2, combo)
+        dialog._layout_corpo.insertWidget(3, lbl_dias)
+        dialog._layout_corpo.insertWidget(4, inp_dias)
+        dialog._layout_corpo.insertWidget(5, lbl_aviso)
 
         def _salvar():
+            plano_id = combo.currentData()
+            if not plano_id:
+                lbl_aviso.setText("⚠️  Nenhum plano disponível.")
+                return
             try:
                 dias = int(inp_dias.text().strip())
                 if dias < 0:
@@ -264,17 +306,17 @@ class AssinaturasController:
                 return
             dialog._btn_confirmar.setEnabled(False)
             dialog._btn_confirmar.setText("Salvando...")
-            w = AssWorker(criar_assinatura, user_id, combo.currentData(), dias)
-            self._workers.append(w)
-            w.sucesso.connect(lambda: (dialog.accept(), self._workers.clear()))
-            w.erro.connect(
+            w = _chamar_rpc(
+                "atribuir_plano",
+                {"p_user_id": user_id, "p_plano_id": plano_id, "p_dias": dias},
+                lambda: dialog.accept(),
                 lambda msg: (
                     lbl_aviso.setText(f"⚠️  {msg}"),
                     dialog._btn_confirmar.setEnabled(True),
                     dialog._btn_confirmar.setText("✓  Confirmar"),
-                )
+                ),
             )
-            w.executar()
+            self._workers.append(w)
 
         dialog._btn_confirmar.clicked.connect(_salvar)
         dialog.exec()
@@ -320,60 +362,92 @@ class AssinaturasController:
         dialog.exec()
 
     def _dialog_mudar_plano(self, user_id: str):
+        import os
         from telas.dialogs import DialogBase
+        from utils.supabase_admin import criar_assinatura
+
+        BASICO_ID = os.getenv("PLANO_BASICO_ID", "11111111-1111-1111-1111-111111111111")
 
         dialog = DialogBase("🎯  Mudar Plano", parent=self.ui)
-        lbl = QLabel("Selecione o novo plano:")
-        lbl.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
+
+        lbl_plano = QLabel("Selecione o novo plano:")
+        lbl_plano.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
+
         combo = QComboBox()
         combo.setFixedHeight(36)
         combo.setStyleSheet(self._estilo_combo())
-        for p in listar_planos():
-            combo.addItem(p["nome"], p["id"])
+        for p in self._store.planos:
+            if p["id"] != BASICO_ID:
+                combo.addItem(p["nome"], p["id"])
+
+        lbl_dias = QLabel("Dias de acesso (0 = sem expiração):")
+        lbl_dias.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
+
+        inp_dias = QLineEdit("30")
+        inp_dias.setFixedHeight(36)
+        inp_dias.setStyleSheet(dialog._estilo_input())
+
         lbl_aviso = QLabel("")
         lbl_aviso.setStyleSheet("color: #ff5c5c; font-size: 11px;")
-        dialog._layout_corpo.insertWidget(0, lbl)
+
+        dialog._layout_corpo.insertWidget(0, lbl_plano)
         dialog._layout_corpo.insertWidget(1, combo)
-        dialog._layout_corpo.insertWidget(2, lbl_aviso)
+        dialog._layout_corpo.insertWidget(2, lbl_dias)
+        dialog._layout_corpo.insertWidget(3, inp_dias)
+        dialog._layout_corpo.insertWidget(4, lbl_aviso)
 
         def _salvar():
+            plano_id = combo.currentData()
+            if not plano_id:
+                lbl_aviso.setText("⚠️  Nenhum plano disponível.")
+                return
+            try:
+                dias = int(inp_dias.text().strip())
+                if dias < 0:
+                    raise ValueError
+            except ValueError:
+                lbl_aviso.setText("⚠️  Dias inválido.")
+                return
             dialog._btn_confirmar.setEnabled(False)
             dialog._btn_confirmar.setText("Salvando...")
-            w = AssWorker(mudar_plano, user_id, combo.currentData())
-            self._workers.append(w)
-            w.sucesso.connect(lambda: (dialog.accept(), self._workers.clear()))
-            w.erro.connect(
+            w = _chamar_rpc(
+                "atribuir_plano",
+                {"p_user_id": user_id, "p_plano_id": plano_id, "p_dias": dias},
+                lambda: dialog.accept(),
                 lambda msg: (
                     lbl_aviso.setText(f"⚠️  {msg}"),
                     dialog._btn_confirmar.setEnabled(True),
                     dialog._btn_confirmar.setText("✓  Confirmar"),
-                )
+                ),
             )
-            w.executar()
+            self._workers.append(w)
 
         dialog._btn_confirmar.clicked.connect(_salvar)
         dialog.exec()
 
-    def _confirmar_revogar(self, user_id: str, username: str):
+    def _revogar_para_basico(self, user_id: str, username: str):
         from telas.dialogs import DialogConfirmacao
 
         if DialogConfirmacao(
-            f"Deseja revogar a assinatura de '{username}'?", parent=self.ui
+            f"Revogar plano de '{username}'? O usuário receberá o plano Básico sem expiração.",
+            parent=self.ui,
         ).exec():
-            w = AssWorker(revogar_assinatura, user_id)
-            self._workers.append(w)
-            w.sucesso.connect(lambda: self._workers.clear())
-            w.executar()
+            import threading, os
+            from supabase import create_client
+            from dotenv import load_dotenv
 
-    def _estilo_combo(self) -> str:
-        return """
-            QComboBox { background-color: rgba(255,255,255,0.05);
-                border: 1px solid #2a3f7a; border-radius: 8px;
-                color: white; padding: 0 12px; font-size: 12px; }
-            QComboBox::drop-down { border: none; }
-            QComboBox QAbstractItemView { background-color: #1a2854;
-                color: white; border: 1px solid #FFD700; }
-        """
+            load_dotenv()
+
+            def _run():
+                try:
+                    c = create_client(
+                        os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY")
+                    )
+                    c.rpc("revogar_para_basico", {"p_user_id": user_id}).execute()
+                except Exception as e:
+                    print(f"[Revogar] Erro: {e}")
+
+            threading.Thread(target=_run, daemon=True).start()
 
     def _item(self, texto: str) -> QTableWidgetItem:
         item = QTableWidgetItem(str(texto))

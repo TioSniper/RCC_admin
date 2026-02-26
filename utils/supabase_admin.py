@@ -9,6 +9,7 @@ load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+PLANO_BASICO_ID = "11111111-1111-1111-1111-111111111111"
 
 
 def _cliente() -> Client:
@@ -113,6 +114,35 @@ def ativar_modulo(id_modulo: str, ativo: bool) -> tuple[bool, str]:
         return True, "Módulo atualizado."
     except Exception as e:
         return False, f"Erro: {e}"
+
+
+# Adicione esta função no supabase_admin.py
+
+
+def excluir_modulo(modulo_id: str) -> tuple[bool, str]:
+    """
+    Remove um módulo. Falha se o módulo estiver vinculado a algum plano.
+    """
+    try:
+        # Verifica se está vinculado a algum plano
+        r = (
+            _cliente()
+            .table("planos_modulos")
+            .select("plano_id")
+            .eq("modulo_id", modulo_id)
+            .execute()
+        )
+        if r.data:
+            return (
+                False,
+                "Módulo está vinculado a um ou mais planos. Remova-o dos planos antes de excluir.",
+            )
+
+        _cliente().table("modulos").delete().eq("id", modulo_id).execute()
+        _logs.registrar("excluir_modulo", None, {"modulo_id": modulo_id})
+        return True, "Módulo excluído."
+    except Exception as e:
+        return False, str(e)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -319,6 +349,10 @@ def deletar_usuario(user_id: str) -> tuple[bool, str]:
 
 
 def listar_assinaturas() -> list:
+    """
+    Lista assinaturas ativas incluindo nome do plano via v_assinaturas.
+    Já existia — mantida igual, só documentando que retorna plano_nome.
+    """
     try:
         r = (
             _cliente()
@@ -387,12 +421,17 @@ def renovar_assinatura(user_id: str, dias: int) -> tuple[bool, str]:
 
 
 def revogar_assinatura(user_id: str) -> tuple[bool, str]:
+    """
+    Revoga o plano atual e aplica o plano básico vitalício.
+    Usa a RPC revogar_para_basico criada no banco.
+    """
     try:
-        _cliente().table("assinaturas").update({"ativo": False}).eq(
-            "user_id", user_id
-        ).eq("ativo", True).execute()
+        _cliente().rpc(
+            "revogar_para_basico",
+            {"p_user_id": user_id},
+        ).execute()
         _logs.registrar("revogar_assinatura", user_id)
-        return True, "Assinatura revogada."
+        return True, "Assinatura revogada. Plano básico aplicado."
     except Exception as e:
         return False, f"Erro: {e}"
 

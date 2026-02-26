@@ -9,25 +9,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
 )
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
-from utils.supabase_admin import (
-    resumo_geral,
-    listar_expirando,
-    listar_solicitacoes,
-    aprovar_solicitacao,
-    rejeitar_solicitacao,
-)
-
-
-class DashboardWorker(QObject):
-    dados_prontos = pyqtSignal(dict, list, list)
-
-    def buscar(self):
-        threading.Thread(target=self._run, daemon=True).start()
-
-    def _run(self):
-        self.dados_prontos.emit(
-            resumo_geral(), listar_expirando(7), listar_solicitacoes()
-        )
+from utils.supabase_admin import aprovar_solicitacao, rejeitar_solicitacao
 
 
 class AprovacaoWorker(QObject):
@@ -66,48 +48,48 @@ class RejeicaoWorker(QObject):
 
 class DashboardController:
 
-    def __init__(self, ui, realtime=None):
+    def __init__(self, ui, store):
         self.ui = ui
+        self._store = store
         self._workers = []
-        self.worker = DashboardWorker()
-        self.worker.dados_prontos.connect(self._atualizar_ui)
 
-        if realtime:
-            # aceita payload mas ignora — dashboard sempre re-fetch completo
-            realtime.solicitacoes_mudou.connect(lambda _: self._carregar())
-            realtime.usuarios_mudou.connect(lambda _: self._carregar())
-            realtime.assinaturas_mudou.connect(lambda _: self._carregar())
+        # Conecta sinais do store — UI só atualiza quando cache muda
+        store.resumo_atualizado.connect(self._atualizar_cards)
+        store.solicitacoes_atualizadas.connect(self._atualizar_solicitacoes)
+        store.sessoes_atualizadas.connect(self._atualizar_card_online)
+        store.assinaturas_atualizadas.connect(self._atualizar_expirando)
+        store.carregamento_completo.connect(self._render_completo)
 
-        self.ui.btn_atualizar.clicked.connect(self._carregar)
-        self._carregar()
+        self.ui.btn_atualizar.clicked.connect(lambda: store.carregar_tudo())
 
-    def _carregar(self):
-        self.worker.buscar()
+        # Se store já tem dados (aba visitada novamente), renderiza imediato
+        if store.resumo:
+            self._render_completo()
 
-    def _atualizar_ui(self, resumo, expirando, solicitacoes):
-        self._atualizar_cards(resumo)
-        self._preencher_expirando(expirando)
-        self._preencher_solicitacoes(solicitacoes)
+    def _render_completo(self):
+        self._atualizar_cards()
+        self._atualizar_solicitacoes()
+        self._atualizar_expirando()
+        self._atualizar_card_online()
 
-    def _atualizar_cards(self, resumo):
-        if not resumo:
+    def _atualizar_cards(self):
+        r = self._store.resumo
+        if not r:
             return
-        self.ui.card_usuarios.lbl_valor.setText(str(resumo.get("total_usuarios", 0)))
-        self.ui.card_ativos.lbl_valor.setText(str(resumo.get("usuarios_ativos", 0)))
-        self.ui.card_assinaturas.lbl_valor.setText(
-            str(resumo.get("assinaturas_ativas", 0))
-        )
-        self.ui.card_expirando.lbl_valor.setText(str(resumo.get("expirando_7_dias", 0)))
-        self.ui.card_expiradas.lbl_valor.setText(str(resumo.get("expiradas", 0)))
+        self.ui.card_usuarios.lbl_valor.setText(str(r.get("total_usuarios", 0)))
+        self.ui.card_assinaturas.lbl_valor.setText(str(r.get("assinaturas_ativas", 0)))
+        self.ui.card_expirando.lbl_valor.setText(str(r.get("expirando_7_dias", 0)))
+        self.ui.card_expiradas.lbl_valor.setText(str(r.get("expiradas", 0)))
 
-    def _preencher_expirando(self, expirando):
+    def _atualizar_card_online(self):
+        self.ui.card_ativos.lbl_valor.setText(str(len(self._store.sessoes)))
+
+    def _atualizar_expirando(self):
         tabela = self.ui.tabela_expirando
         tabela.setRowCount(0)
-        for dados in expirando:
+        for dados in self._store.expirando:
             row = tabela.rowCount()
             tabela.insertRow(row)
-            username = dados.get("username", "—")
-            plano = dados.get("plano_nome", "—")
             expira_raw = dados.get("expira_em", "")
             try:
                 dt = datetime.fromisoformat(expira_raw.replace("Z", "+00:00"))
@@ -116,8 +98,8 @@ class DashboardController:
             except Exception:
                 dias = 0
                 expira_fmt = expira_raw
-            tabela.setItem(row, 0, self._item(username))
-            tabela.setItem(row, 1, self._item(plano))
+            tabela.setItem(row, 0, self._item(dados.get("username", "—")))
+            tabela.setItem(row, 1, self._item(dados.get("plano_nome", "—")))
             tabela.setItem(row, 2, self._item(expira_fmt))
             item_dias = QTableWidgetItem(f"{dias} dias")
             item_dias.setForeground(
@@ -126,9 +108,10 @@ class DashboardController:
             item_dias.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             tabela.setItem(row, 3, item_dias)
 
-    def _preencher_solicitacoes(self, solicitacoes):
+    def _atualizar_solicitacoes(self):
         tabela = self.ui.tabela_solicitacoes
         tabela.setRowCount(0)
+        solicitacoes = self._store.solicitacoes
         total = len(solicitacoes)
         self.ui.card_pendentes.setText(str(total))
         cor = "#dc2626" if total > 0 else "#16a34a"
@@ -139,7 +122,6 @@ class DashboardController:
             font-size: 12px; font-weight: bold;
         """
         )
-
         if not solicitacoes:
             tabela.setRowCount(1)
             item = QTableWidgetItem("✅  Nenhuma solicitação pendente")
@@ -148,7 +130,6 @@ class DashboardController:
             tabela.setItem(0, 0, item)
             tabela.setSpan(0, 0, 1, 4)
             return
-
         for s in solicitacoes:
             row = tabela.rowCount()
             tabela.insertRow(row)
@@ -161,12 +142,11 @@ class DashboardController:
                     criado = dt.strftime("%d/%m/%Y %H:%M")
                 except Exception:
                     pass
-
             tabela.setItem(row, 0, self._item(username))
             tabela.setItem(row, 1, self._item(criado))
 
-            def _make_btn(texto, cor, cor_hover):
-                b = QPushButton(texto)
+            def _btn(txt, cor, hover):
+                b = QPushButton(txt)
                 b.setFixedHeight(28)
                 b.setCursor(Qt.CursorShape.PointingHandCursor)
                 b.setStyleSheet(
@@ -174,31 +154,31 @@ class DashboardController:
                     QPushButton {{ background-color: {cor}; color: white;
                         border-radius: 6px; font-size: 11px;
                         font-weight: bold; border: none; padding: 0 8px; }}
-                    QPushButton:hover {{ background-color: {cor_hover}; }}
+                    QPushButton:hover {{ background-color: {hover}; }}
                 """
                 )
                 return b
 
-            btn_aprovar = _make_btn("✅ Aprovar", "#16a34a", "#15803d")
-            btn_rejeitar = _make_btn("❌ Rejeitar", "#dc2626", "#b91c1c")
-            btn_aprovar.clicked.connect(
+            btn_a = _btn("✅ Aprovar", "#16a34a", "#15803d")
+            btn_r = _btn("❌ Rejeitar", "#dc2626", "#b91c1c")
+            btn_a.clicked.connect(
                 lambda _, sid=sol_id, u=username: self._dialog_aprovar(sid, u)
             )
-            btn_rejeitar.clicked.connect(
+            btn_r.clicked.connect(
                 lambda _, sid=sol_id, u=username: self._dialog_rejeitar(sid, u)
             )
 
-            def _centralizar(btn):
+            def _center(b):
                 w = QWidget()
                 l = QHBoxLayout(w)
                 l.setContentsMargins(4, 2, 4, 2)
                 l.addStretch()
-                l.addWidget(btn)
+                l.addWidget(b)
                 l.addStretch()
                 return w
 
-            tabela.setCellWidget(row, 2, _centralizar(btn_aprovar))
-            tabela.setCellWidget(row, 3, _centralizar(btn_rejeitar))
+            tabela.setCellWidget(row, 2, _center(btn_a))
+            tabela.setCellWidget(row, 3, _center(btn_r))
             tabela.setRowHeight(row, 40)
 
     def _dialog_aprovar(self, sol_id, username):
@@ -214,7 +194,6 @@ class DashboardController:
         inp_dias.setStyleSheet(dialog._estilo_input())
         lbl_aviso = QLabel("")
         lbl_aviso.setStyleSheet("color: #ff5c5c; font-size: 11px;")
-
         dialog._layout_corpo.insertWidget(0, lbl_info)
         dialog._layout_corpo.insertWidget(1, lbl_dias)
         dialog._layout_corpo.insertWidget(2, inp_dias)
@@ -226,7 +205,7 @@ class DashboardController:
                 if dias < 0:
                     raise ValueError
             except ValueError:
-                lbl_aviso.setText("⚠️  Informe um número válido (0 = sem expiração).")
+                lbl_aviso.setText("⚠️  Número inválido.")
                 return
             dialog._btn_confirmar.setEnabled(False)
             dialog._btn_confirmar.setText("Aprovando...")

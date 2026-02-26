@@ -1,4 +1,3 @@
-import threading
 from PyQt6.QtWidgets import (
     QTableWidgetItem,
     QWidget,
@@ -10,31 +9,21 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QObject, pyqtSignal, QThread
 from utils.supabase_admin import (
-    listar_planos,
     criar_plano,
     editar_plano,
     ativar_plano,
     adicionar_modulo_plano,
     remover_modulo_plano,
-    listar_modulos,
     excluir_plano,
 )
 
 
 class PlanosWorker(QObject):
-    dados_prontos = pyqtSignal(list)
-    toggle_pronto = pyqtSignal()
     salvar_pronto = pyqtSignal(bool, str)
     editar_pronto = pyqtSignal(bool)
     modulos_pronto = pyqtSignal()
+    toggle_pronto = pyqtSignal()
     delete_pronto = pyqtSignal(bool)
-
-    def buscar(self):
-        self.dados_prontos.emit(listar_planos())
-
-    def toggle(self, plano_id, ativo):
-        ativar_plano(plano_id, not ativo)
-        self.toggle_pronto.emit()
 
     def salvar(self, nome, descricao, modulos):
         ok, msg = criar_plano(nome, descricao, modulos)
@@ -43,6 +32,10 @@ class PlanosWorker(QObject):
     def editar(self, plano_id, nome, descricao):
         ok, _ = editar_plano(plano_id, nome, descricao)
         self.editar_pronto.emit(ok)
+
+    def toggle(self, plano_id, ativo):
+        ativar_plano(plano_id, not ativo)
+        self.toggle_pronto.emit()
 
     def atualizar_modulos(self, plano_id, checks, modulos_atuais):
         for mid, checked in checks.items():
@@ -59,61 +52,55 @@ class PlanosWorker(QObject):
 
 class PlanosController:
 
-    def __init__(self, ui, realtime=None):
+    def __init__(self, ui, store, realtime=None):
         self.ui = ui
+        self._store = store
+
         self.thread = QThread()
         self.worker = PlanosWorker()
         self.worker.moveToThread(self.thread)
-
-        self.worker.dados_prontos.connect(self._preencher)
-        self.worker.toggle_pronto.connect(self._carregar)
         self.worker.salvar_pronto.connect(self._finalizar_salvar)
         self.worker.editar_pronto.connect(self._finalizar_editar)
         self.worker.modulos_pronto.connect(self._finalizar_modulos)
+        self.worker.toggle_pronto.connect(self._renderizar)
         self.worker.delete_pronto.connect(self._finalizar_exclusao)
-
         self.thread.start()
 
-        if realtime:
-            realtime.planos_mudou.connect(lambda _: self._carregar())
-            realtime.modulos_mudou.connect(lambda _: self._carregar())
+        # Store notifica quando planos ou modulos mudam
+        store.planos_atualizados.connect(self._renderizar)
+        store.modulos_atualizados.connect(self._renderizar)
+        store.carregamento_completo.connect(self._renderizar)
 
         self._conectar_eventos()
-        self._carregar()
+        if store.planos:
+            self._renderizar()
 
     def _conectar_eventos(self):
-        self.ui.btn_refresh.clicked.connect(self._carregar)
+        self.ui.btn_refresh.clicked.connect(lambda: self._store.carregar_tudo())
         self.ui.btn_novo.clicked.connect(self._dialog_novo_plano)
 
-    def _carregar(self):
-        self.worker.buscar()
-
-    def _preencher(self, planos: list):
+    def _renderizar(self):
         tabela = self.ui.tabela
         tabela.setRowCount(0)
-        modulos_disponiveis = listar_modulos()
+        modulos_disp = self._store.modulos
 
-        for p in planos:
+        for p in self._store.planos:
             row = tabela.rowCount()
             tabela.insertRow(row)
             ativo = p.get("ativo", True)
             plano_id = p.get("id", "")
-            modulos_ids = [m["modulo_id"] for m in p.get("planos_modulos", [])]
-            modulos_nomes = [
-                m["nome"] for m in modulos_disponiveis if m["id"] in modulos_ids
-            ]
-            modulos_txt = ", ".join(modulos_nomes) if modulos_nomes else "Nenhum"
+            mids = [m["modulo_id"] for m in p.get("planos_modulos", [])]
+            nomes = [m["nome"] for m in modulos_disp if m["id"] in mids]
+            mod_txt = ", ".join(nomes) if nomes else "Nenhum"
 
-            status_item = QTableWidgetItem("✅ Ativo" if ativo else "❌ Inativo")
-            status_item.setForeground(
-                Qt.GlobalColor.green if ativo else Qt.GlobalColor.red
-            )
-            status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            status = QTableWidgetItem("✅ Ativo" if ativo else "❌ Inativo")
+            status.setForeground(Qt.GlobalColor.green if ativo else Qt.GlobalColor.red)
+            status.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
             tabela.setItem(row, 0, self._item(p.get("nome", "—")))
             tabela.setItem(row, 1, self._item(p.get("descricao", "—")))
-            tabela.setItem(row, 2, self._item(modulos_txt))
-            tabela.setItem(row, 3, status_item)
+            tabela.setItem(row, 2, self._item(mod_txt))
+            tabela.setItem(row, 3, status)
 
             w = QWidget()
             l = QHBoxLayout(w)
@@ -125,11 +112,11 @@ class PlanosController:
                 b.setFixedHeight(26)
                 b.setCursor(Qt.CursorShape.PointingHandCursor)
                 b.setStyleSheet(
-                    f"""
-                    QPushButton {{ background-color: {cor}; color: white;
-                        border-radius: 5px; font-size: 11px;
-                        border: none; padding: 0 8px; }}
-                """
+                    f"""QPushButton {{
+                    background-color: {cor}; color: white;
+                    border-radius: 5px; font-size: 11px;
+                    border: none; padding: 0 8px;
+                }}"""
                 )
                 return b
 
@@ -146,12 +133,10 @@ class PlanosController:
                 ): self._dialog_editar(pid, n, d)
             )
             btn_modulos.clicked.connect(
-                lambda _, pid=plano_id, mids=modulos_ids: self._dialog_modulos(
-                    pid, mids
-                )
+                lambda _, pid=plano_id, m=mids: self._dialog_modulos(pid, m)
             )
             btn_toggle.clicked.connect(
-                lambda _, pid=plano_id, a=ativo: self._toggle(pid, a)
+                lambda _, pid=plano_id, a=ativo: self.worker.toggle(pid, a)
             )
             btn_excluir.clicked.connect(
                 lambda _, pid=plano_id: self._confirmar_exclusao(pid)
@@ -164,9 +149,6 @@ class PlanosController:
             l.addStretch()
             tabela.setCellWidget(row, 4, w)
             tabela.setRowHeight(row, 40)
-
-    def _toggle(self, plano_id: str, ativo: bool):
-        self.worker.toggle(plano_id, ativo)
 
     def _dialog_novo_plano(self):
         from telas.dialogs import DialogBase
@@ -186,18 +168,15 @@ class PlanosController:
 
         inp_nome = _campo("Nome do plano:", "Ex: Premium", 0)
         inp_desc = _campo("Descrição:", "Ex: Acesso total", 1)
-
         lbl_mod = QLabel("Módulos incluídos:")
         lbl_mod.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
         dialog._layout_corpo.insertWidget(4, lbl_mod)
-
         checks = {}
-        for i, m in enumerate(listar_modulos()):
+        for i, m in enumerate(self._store.modulos):
             cb = QCheckBox(m["nome"])
             cb.setStyleSheet("color: white; font-size: 12px;")
             dialog._layout_corpo.insertWidget(5 + i, cb)
             checks[m["id"]] = cb
-
         lbl_aviso = QLabel("")
         lbl_aviso.setStyleSheet("color: #ff5c5c; font-size: 11px;")
         dialog._layout_corpo.addWidget(lbl_aviso)
@@ -221,11 +200,10 @@ class PlanosController:
     def _finalizar_salvar(self, ok, msg):
         if ok:
             self._dialog_ref.accept()
-            self._carregar()
         else:
             self._lbl_ref.setText(f"⚠️  {msg}")
 
-    def _dialog_editar(self, plano_id: str, nome: str, descricao: str):
+    def _dialog_editar(self, plano_id, nome, descricao):
         from telas.dialogs import DialogBase
 
         dialog = DialogBase("✏️  Editar Plano", parent=self.ui)
@@ -253,19 +231,16 @@ class PlanosController:
     def _finalizar_editar(self, ok):
         if ok:
             self._dialog_ref.accept()
-            self._carregar()
 
-    def _dialog_modulos(self, plano_id: str, modulos_atuais: list):
+    def _dialog_modulos(self, plano_id, modulos_atuais):
         from telas.dialogs import DialogBase
 
         dialog = DialogBase("🧩  Módulos do Plano", parent=self.ui)
-
         lbl = QLabel("Selecione os módulos incluídos:")
         lbl.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
         dialog._layout_corpo.insertWidget(0, lbl)
-
         checks = {}
-        for i, m in enumerate(listar_modulos()):
+        for i, m in enumerate(self._store.modulos):
             cb = QCheckBox(m["nome"])
             cb.setChecked(m["id"] in modulos_atuais)
             cb.setStyleSheet("color: white; font-size: 12px;")
@@ -285,7 +260,6 @@ class PlanosController:
 
     def _finalizar_modulos(self):
         self._dialog_ref.accept()
-        self._carregar()
 
     def _confirmar_exclusao(self, plano_id):
         from telas.dialogs import DialogBase
@@ -296,10 +270,7 @@ class PlanosController:
         dialog._layout_corpo.insertWidget(0, lbl)
         dialog._btn_confirmar.setText("Excluir")
         dialog._btn_confirmar.setStyleSheet(
-            """
-            QPushButton { background-color: #dc2626; color: white;
-                border-radius: 6px; padding: 6px 12px; }
-        """
+            "QPushButton { background-color: #dc2626; color: white; border-radius: 6px; padding: 6px 12px; }"
         )
 
         def _confirmar():
@@ -312,9 +283,8 @@ class PlanosController:
     def _finalizar_exclusao(self, ok):
         if ok:
             self._dialog_ref.accept()
-            self._carregar()
 
-    def _item(self, texto: str) -> QTableWidgetItem:
+    def _item(self, texto):
         item = QTableWidgetItem(str(texto))
         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         return item
