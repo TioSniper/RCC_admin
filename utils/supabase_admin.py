@@ -11,7 +11,9 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 
 
-cliente = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+def _cliente() -> Client:
+    return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
 
 # ═══════════════════════════════════════════════════════════════
 # LOGS EM LOTE
@@ -47,7 +49,7 @@ class GerenciadorLogs:
             lote = self._fila.copy()
             self._fila.clear()
         try:
-            cliente.table("logs_admin").insert(lote).execute()
+            _cliente().table("logs_admin").insert(lote).execute()
         except Exception as e:
             print(f"Erro ao salvar logs: {e}")
 
@@ -65,7 +67,7 @@ _logs = GerenciadorLogs()
 
 def listar_modulos() -> list:
     try:
-        r = cliente.table("modulos").select("*").order("nome").execute()
+        r = _cliente().table("modulos").select("*").order("nome").execute()
         return r.data
     except Exception as e:
         print(f"Erro ao listar módulos: {e}")
@@ -74,7 +76,7 @@ def listar_modulos() -> list:
 
 def criar_modulo(id_modulo: str, nome: str, descricao: str = "") -> tuple[bool, str]:
     try:
-        cliente.table("modulos").insert(
+        _cliente().table("modulos").insert(
             {
                 "id": id_modulo.lower().replace(" ", "_"),
                 "nome": nome,
@@ -90,7 +92,7 @@ def criar_modulo(id_modulo: str, nome: str, descricao: str = "") -> tuple[bool, 
 
 def editar_modulo(id_modulo: str, nome: str, descricao: str) -> tuple[bool, str]:
     try:
-        cliente.table("modulos").update({"nome": nome, "descricao": descricao}).eq(
+        _cliente().table("modulos").update({"nome": nome, "descricao": descricao}).eq(
             "id", id_modulo
         ).execute()
         _logs.registrar("editar_modulo", detalhes={"modulo": id_modulo})
@@ -101,7 +103,9 @@ def editar_modulo(id_modulo: str, nome: str, descricao: str) -> tuple[bool, str]
 
 def ativar_modulo(id_modulo: str, ativo: bool) -> tuple[bool, str]:
     try:
-        cliente.table("modulos").update({"ativo": ativo}).eq("id", id_modulo).execute()
+        _cliente().table("modulos").update({"ativo": ativo}).eq(
+            "id", id_modulo
+        ).execute()
         _logs.registrar(
             "ativar_modulo" if ativo else "desativar_modulo",
             detalhes={"modulo": id_modulo},
@@ -119,7 +123,8 @@ def ativar_modulo(id_modulo: str, ativo: bool) -> tuple[bool, str]:
 def listar_planos() -> list:
     try:
         r = (
-            cliente.table("planos")
+            _cliente()
+            .table("planos")
             .select("*, planos_modulos(modulo_id)")
             .order("nome")
             .execute()
@@ -133,13 +138,14 @@ def listar_planos() -> list:
 def criar_plano(nome: str, descricao: str, modulos: list) -> tuple[bool, str]:
     try:
         r = (
-            cliente.table("planos")
+            _cliente()
+            .table("planos")
             .insert({"nome": nome, "descricao": descricao, "ativo": True})
             .execute()
         )
         plano_id = r.data[0]["id"]
         if modulos:
-            cliente.table("planos_modulos").insert(
+            _cliente().table("planos_modulos").insert(
                 [{"plano_id": plano_id, "modulo_id": m} for m in modulos]
             ).execute()
         _logs.registrar("criar_plano", detalhes={"nome": nome})
@@ -150,7 +156,7 @@ def criar_plano(nome: str, descricao: str, modulos: list) -> tuple[bool, str]:
 
 def editar_plano(plano_id: str, nome: str, descricao: str) -> tuple[bool, str]:
     try:
-        cliente.table("planos").update({"nome": nome, "descricao": descricao}).eq(
+        _cliente().table("planos").update({"nome": nome, "descricao": descricao}).eq(
             "id", plano_id
         ).execute()
         _logs.registrar("editar_plano", detalhes={"plano_id": plano_id})
@@ -161,7 +167,7 @@ def editar_plano(plano_id: str, nome: str, descricao: str) -> tuple[bool, str]:
 
 def adicionar_modulo_plano(plano_id: str, modulo_id: str) -> tuple[bool, str]:
     try:
-        cliente.table("planos_modulos").insert(
+        _cliente().table("planos_modulos").insert(
             {"plano_id": plano_id, "modulo_id": modulo_id}
         ).execute()
         return True, "Módulo adicionado."
@@ -171,7 +177,7 @@ def adicionar_modulo_plano(plano_id: str, modulo_id: str) -> tuple[bool, str]:
 
 def remover_modulo_plano(plano_id: str, modulo_id: str) -> tuple[bool, str]:
     try:
-        cliente.table("planos_modulos").delete().eq("plano_id", plano_id).eq(
+        _cliente().table("planos_modulos").delete().eq("plano_id", plano_id).eq(
             "modulo_id", modulo_id
         ).execute()
         return True, "Módulo removido."
@@ -181,7 +187,7 @@ def remover_modulo_plano(plano_id: str, modulo_id: str) -> tuple[bool, str]:
 
 def ativar_plano(plano_id: str, ativo: bool) -> tuple[bool, str]:
     try:
-        cliente.table("planos").update({"ativo": ativo}).eq("id", plano_id).execute()
+        _cliente().table("planos").update({"ativo": ativo}).eq("id", plano_id).execute()
         return True, "Plano atualizado."
     except Exception as e:
         return False, f"Erro: {e}"
@@ -189,7 +195,7 @@ def ativar_plano(plano_id: str, ativo: bool) -> tuple[bool, str]:
 
 def excluir_plano(plano_id: str):
     try:
-        cliente.table("planos").delete().eq("id", plano_id).execute()
+        _cliente().table("planos").delete().eq("id", plano_id).execute()
 
         return True
     except Exception as e:
@@ -205,12 +211,17 @@ def excluir_plano(plano_id: str):
 def listar_usuarios() -> list:
     try:
         perfis = (
-            cliente.table("perfis").select("*").order("criado_em", desc=True).execute()
+            _cliente()
+            .table("perfis")
+            .select("*")
+            .order("criado_em", desc=True)
+            .execute()
         )
         usuarios = []
         for p in perfis.data:
             ass = (
-                cliente.table("v_assinaturas")
+                _cliente()
+                .table("v_assinaturas")
                 .select("*")
                 .eq("user_id", p["id"])
                 .eq("ativo", True)
@@ -229,7 +240,7 @@ def listar_usuarios() -> list:
 def criar_usuario(username: str, senha: str) -> tuple[bool, str]:
     try:
         email = f"{username.lower().strip()}@rcc.app"
-        response = cliente.auth.admin.create_user(
+        response = _cliente().auth.admin.create_user(
             {
                 "email": email,
                 "password": senha,
@@ -237,7 +248,7 @@ def criar_usuario(username: str, senha: str) -> tuple[bool, str]:
             }
         )
         user_id = response.user.id
-        cliente.table("perfis").update({"username": username.lower().strip()}).eq(
+        _cliente().table("perfis").update({"username": username.lower().strip()}).eq(
             "id", user_id
         ).execute()
         _logs.registrar("criar_usuario", user_id, {"username": username})
@@ -251,9 +262,9 @@ def criar_usuario(username: str, senha: str) -> tuple[bool, str]:
 
 def editar_username(user_id: str, novo_username: str) -> tuple[bool, str]:
     try:
-        cliente.table("perfis").update({"username": novo_username.lower().strip()}).eq(
-            "id", user_id
-        ).execute()
+        _cliente().table("perfis").update(
+            {"username": novo_username.lower().strip()}
+        ).eq("id", user_id).execute()
         _logs.registrar("editar_username", user_id)
         return True, "Username atualizado."
     except Exception as e:
@@ -262,7 +273,7 @@ def editar_username(user_id: str, novo_username: str) -> tuple[bool, str]:
 
 def ativar_usuario(user_id: str) -> tuple[bool, str]:
     try:
-        cliente.table("perfis").update({"ativo": True}).eq("id", user_id).execute()
+        _cliente().table("perfis").update({"ativo": True}).eq("id", user_id).execute()
         _logs.registrar("ativar_usuario", user_id)
         return True, "Usuário ativado."
     except Exception as e:
@@ -271,7 +282,7 @@ def ativar_usuario(user_id: str) -> tuple[bool, str]:
 
 def desativar_usuario(user_id: str) -> tuple[bool, str]:
     try:
-        cliente.table("perfis").update({"ativo": False}).eq("id", user_id).execute()
+        _cliente().table("perfis").update({"ativo": False}).eq("id", user_id).execute()
         _logs.registrar("desativar_usuario", user_id)
         return True, "Usuário desativado."
     except Exception as e:
@@ -280,7 +291,7 @@ def desativar_usuario(user_id: str) -> tuple[bool, str]:
 
 def resetar_senha(user_id: str, nova_senha: str) -> tuple[bool, str]:
     try:
-        cliente.auth.admin.update_user_by_id(user_id, {"password": nova_senha})
+        _cliente().auth.admin.update_user_by_id(user_id, {"password": nova_senha})
         _logs.registrar("resetar_senha", user_id)
         return True, "Senha resetada."
     except Exception as e:
@@ -289,11 +300,13 @@ def resetar_senha(user_id: str, nova_senha: str) -> tuple[bool, str]:
 
 def deletar_usuario(user_id: str) -> tuple[bool, str]:
     try:
-        perfil = cliente.table("perfis").select("username").eq("id", user_id).execute()
+        perfil = (
+            _cliente().table("perfis").select("username").eq("id", user_id).execute()
+        )
         username = perfil.data[0].get("username") if perfil.data else None
         if username:
-            cliente.table("solicitacoes").delete().eq("username", username).execute()
-        cliente.auth.admin.delete_user(user_id)
+            _cliente().table("solicitacoes").delete().eq("username", username).execute()
+        _cliente().auth.admin.delete_user(user_id)
         _logs.registrar("deletar_usuario", user_id)
         return True, "Usuário deletado."
     except Exception as e:
@@ -308,7 +321,8 @@ def deletar_usuario(user_id: str) -> tuple[bool, str]:
 def listar_assinaturas() -> list:
     try:
         r = (
-            cliente.table("v_assinaturas")
+            _cliente()
+            .table("v_assinaturas")
             .select("*")
             .eq("ativo", True)
             .order("expira_em")
@@ -323,7 +337,8 @@ def listar_assinaturas() -> list:
 def historico_assinaturas(user_id: str) -> list:
     try:
         r = (
-            cliente.table("v_assinaturas")
+            _cliente()
+            .table("v_assinaturas")
             .select("*")
             .eq("user_id", user_id)
             .order("criado_em", desc=True)
@@ -337,10 +352,10 @@ def historico_assinaturas(user_id: str) -> list:
 
 def criar_assinatura(user_id: str, plano_id: str, dias: int) -> tuple[bool, str]:
     try:
-        cliente.table("assinaturas").update({"ativo": False}).eq("user_id", user_id).eq(
-            "ativo", True
-        ).execute()
-        cliente.rpc(
+        _cliente().table("assinaturas").update({"ativo": False}).eq(
+            "user_id", user_id
+        ).eq("ativo", True).execute()
+        _cliente().rpc(
             "criar_assinatura_admin",
             {
                 "p_user_id": user_id,
@@ -358,7 +373,7 @@ def criar_assinatura(user_id: str, plano_id: str, dias: int) -> tuple[bool, str]
 
 def renovar_assinatura(user_id: str, dias: int) -> tuple[bool, str]:
     try:
-        cliente.rpc(
+        _cliente().rpc(
             "renovar_assinatura_admin",
             {
                 "p_user_id": user_id,
@@ -373,9 +388,9 @@ def renovar_assinatura(user_id: str, dias: int) -> tuple[bool, str]:
 
 def revogar_assinatura(user_id: str) -> tuple[bool, str]:
     try:
-        cliente.table("assinaturas").update({"ativo": False}).eq("user_id", user_id).eq(
-            "ativo", True
-        ).execute()
+        _cliente().table("assinaturas").update({"ativo": False}).eq(
+            "user_id", user_id
+        ).eq("ativo", True).execute()
         _logs.registrar("revogar_assinatura", user_id)
         return True, "Assinatura revogada."
     except Exception as e:
@@ -384,7 +399,7 @@ def revogar_assinatura(user_id: str) -> tuple[bool, str]:
 
 def mudar_plano(user_id: str, novo_plano_id: str) -> tuple[bool, str]:
     try:
-        cliente.table("assinaturas").update(
+        _cliente().table("assinaturas").update(
             {
                 "plano_id": novo_plano_id,
                 "renovado_em": "now()",
@@ -404,7 +419,8 @@ def mudar_plano(user_id: str, novo_plano_id: str) -> tuple[bool, str]:
 def listar_acessos_extras() -> list:
     try:
         r = (
-            cliente.table("v_acessos_extras")
+            _cliente()
+            .table("v_acessos_extras")
             .select("*")
             .eq("ativo", True)
             .gte("expira_em", "now()")
@@ -419,7 +435,7 @@ def listar_acessos_extras() -> list:
 
 def dar_acesso_extra(user_id: str, modulo_id: str, horas: int) -> tuple[bool, str]:
     try:
-        cliente.rpc(
+        _cliente().rpc(
             "criar_acesso_extra_admin",
             {
                 "p_user_id": user_id,
@@ -437,7 +453,7 @@ def dar_acesso_extra(user_id: str, modulo_id: str, horas: int) -> tuple[bool, st
 
 def revogar_acesso_extra(acesso_id: str, user_id: str) -> tuple[bool, str]:
     try:
-        cliente.table("acessos_extras").update({"ativo": False}).eq(
+        _cliente().table("acessos_extras").update({"ativo": False}).eq(
             "id", acesso_id
         ).execute()
         _logs.registrar("revogar_acesso_extra", user_id)
@@ -457,15 +473,21 @@ def resumo_geral() -> dict:
         em_7_dias = (agora + timedelta(days=7)).isoformat()
         agora_iso = agora.isoformat()
 
-        total = len(cliente.table("perfis").select("id").execute().data)
+        total = len(_cliente().table("perfis").select("id").execute().data)
         ativos = len(
-            cliente.table("perfis").select("id").eq("ativo", True).execute().data
+            _cliente().table("perfis").select("id").eq("ativo", True).execute().data
         )
         ass_ativas = len(
-            cliente.table("assinaturas").select("id").eq("ativo", True).execute().data
+            _cliente()
+            .table("assinaturas")
+            .select("id")
+            .eq("ativo", True)
+            .execute()
+            .data
         )
         expirando = len(
-            cliente.table("assinaturas")
+            _cliente()
+            .table("assinaturas")
             .select("id")
             .eq("ativo", True)
             .lte("expira_em", em_7_dias)
@@ -474,7 +496,8 @@ def resumo_geral() -> dict:
             .data
         )
         expiradas = len(
-            cliente.table("assinaturas")
+            _cliente()
+            .table("assinaturas")
             .select("id")
             .eq("ativo", True)
             .lt("expira_em", agora_iso)
@@ -500,7 +523,8 @@ def listar_expirando(dias: int = 7) -> list:
         em_x_dias = (agora + timedelta(days=dias)).isoformat()
         agora_iso = agora.isoformat()
         r = (
-            cliente.table("v_assinaturas")
+            _cliente()
+            .table("v_assinaturas")
             .select("*")
             .eq("ativo", True)
             .lte("expira_em", em_x_dias)
@@ -522,7 +546,8 @@ def listar_expirando(dias: int = 7) -> list:
 def listar_logs(limite: int = 200) -> list:
     try:
         r = (
-            cliente.table("v_logs_admin")
+            _cliente()
+            .table("v_logs_admin")
             .select("*")
             .order("criado_em", desc=True)
             .limit(limite)
@@ -542,7 +567,8 @@ def listar_logs(limite: int = 200) -> list:
 def listar_solicitacoes() -> list:
     try:
         r = (
-            cliente.table("solicitacoes")
+            _cliente()
+            .table("solicitacoes")
             .select("id, username, criado_em")
             .eq("status", "pendente")
             .order("criado_em")
@@ -555,9 +581,16 @@ def listar_solicitacoes() -> list:
 
 
 def aprovar_solicitacao(sol_id: str, username: str, dias: int) -> tuple[bool, str]:
+    """
+    Aprovação atômica: se qualquer passo falhar após criar o usuário no Auth,
+    o usuário é deletado automaticamente para evitar usuários fantasmas.
+    """
+    user_id = None
     try:
+        # 1. Busca senha real
         sol = (
-            cliente.table("solicitacoes")
+            _cliente()
+            .table("solicitacoes")
             .select("senha_real")
             .eq("id", sol_id)
             .execute()
@@ -568,22 +601,37 @@ def aprovar_solicitacao(sol_id: str, username: str, dias: int) -> tuple[bool, st
         if not senha_real:
             return False, "Dados da solicitação incompletos."
 
-        response = cliente.auth.admin.create_user(
+        # 2. Remove fantasma se existir (mesmo email já cadastrado)
+        email = f"{username}@rcc.app"
+        try:
+            todos = _cliente().auth.admin.list_users()
+            for u in todos:
+                if u.email == email:
+                    print(f"[Aprovação] Removendo fantasma: {email}")
+                    _cliente().auth.admin.delete_user(u.id)
+                    break
+        except Exception:
+            pass
+
+        # 3. Cria usuário no Auth
+        response = _cliente().auth.admin.create_user(
             {
-                "email": f"{username}@rcc.app",
+                "email": email,
                 "password": senha_real,
                 "email_confirm": True,
             }
         )
         user_id = response.user.id
 
-        cliente.table("perfis").update({"username": username}).eq(
+        # 4. Atualiza perfil
+        _cliente().table("perfis").update({"username": username}).eq(
             "id", user_id
         ).execute()
 
-        planos = cliente.table("planos").select("id").eq("nome", "Basico").execute()
+        # 5. Cria assinatura (dias=0 = sem expiração)
+        planos = _cliente().table("planos").select("id").eq("nome", "Basico").execute()
         if planos.data:
-            cliente.rpc(
+            _cliente().rpc(
                 "criar_assinatura_admin",
                 {
                     "p_user_id": user_id,
@@ -592,7 +640,8 @@ def aprovar_solicitacao(sol_id: str, username: str, dias: int) -> tuple[bool, st
                 },
             ).execute()
 
-        cliente.table("solicitacoes").update(
+        # 6. Marca solicitação como aprovada e apaga senha
+        _cliente().table("solicitacoes").update(
             {
                 "status": "aprovado",
                 "senha_real": None,
@@ -604,7 +653,15 @@ def aprovar_solicitacao(sol_id: str, username: str, dias: int) -> tuple[bool, st
             "aprovar_solicitacao", user_id, {"username": username, "dias": dias}
         )
         return True, f"Usuário '{username}' aprovado com sucesso."
+
     except Exception as e:
+        # ROLLBACK: deleta usuário do Auth se foi criado mas algo falhou depois
+        if user_id:
+            try:
+                print(f"[Aprovação] Rollback: deletando {user_id} após falha")
+                _cliente().auth.admin.delete_user(user_id)
+            except Exception as del_err:
+                print(f"[Aprovação] Erro no rollback: {del_err}")
         import traceback
 
         traceback.print_exc()
@@ -613,7 +670,7 @@ def aprovar_solicitacao(sol_id: str, username: str, dias: int) -> tuple[bool, st
 
 def rejeitar_solicitacao(sol_id: str) -> tuple[bool, str]:
     try:
-        cliente.table("solicitacoes").update(
+        _cliente().table("solicitacoes").update(
             {
                 "status": "rejeitado",
                 "senha_real": None,

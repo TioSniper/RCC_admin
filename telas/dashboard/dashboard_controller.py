@@ -61,7 +61,7 @@ class RejeicaoWorker(QObject):
 
     def _run(self):
         ok, msg = rejeitar_solicitacao(self._sol_id)
-        (self.concluido if ok else self.erro).emit() if ok else self.erro.emit(msg)
+        self.concluido.emit() if ok else self.erro.emit(msg)
 
 
 class DashboardController:
@@ -138,6 +138,7 @@ class DashboardController:
             font-size: 12px; font-weight: bold;
         """
         )
+
         if not solicitacoes:
             tabela.setRowCount(1)
             item = QTableWidgetItem("✅  Nenhuma solicitação pendente")
@@ -146,6 +147,7 @@ class DashboardController:
             tabela.setItem(0, 0, item)
             tabela.setSpan(0, 0, 1, 4)
             return
+
         for s in solicitacoes:
             row = tabela.rowCount()
             tabela.insertRow(row)
@@ -158,6 +160,7 @@ class DashboardController:
                     criado = dt.strftime("%d/%m/%Y %H:%M")
                 except Exception:
                     pass
+
             tabela.setItem(row, 0, self._item(username))
             tabela.setItem(row, 1, self._item(criado))
 
@@ -203,13 +206,14 @@ class DashboardController:
         dialog = DialogBase("✅  Aprovar Cadastro", parent=self.ui)
         lbl_info = QLabel(f"Aprovando: <b style='color:#FFD700'>{username}</b>")
         lbl_info.setStyleSheet("color: #cccccc; font-size: 12px;")
-        lbl_dias = QLabel("Dias de acesso inicial:")
+        lbl_dias = QLabel("Dias de acesso inicial (0 = sem expiração):")
         lbl_dias.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
         inp_dias = QLineEdit("30")
         inp_dias.setFixedHeight(36)
         inp_dias.setStyleSheet(dialog._estilo_input())
         lbl_aviso = QLabel("")
         lbl_aviso.setStyleSheet("color: #ff5c5c; font-size: 11px;")
+
         dialog._layout_corpo.insertWidget(0, lbl_info)
         dialog._layout_corpo.insertWidget(1, lbl_dias)
         dialog._layout_corpo.insertWidget(2, inp_dias)
@@ -218,13 +222,15 @@ class DashboardController:
         def _salvar():
             try:
                 dias = int(inp_dias.text().strip())
-                if dias <= 0:
+                if dias < 0:  # 0 = sem expiração, permitido
                     raise ValueError
             except ValueError:
-                lbl_aviso.setText("⚠️  Informe um número válido.")
+                lbl_aviso.setText("⚠️  Informe um número válido (0 = sem expiração).")
                 return
+
             dialog._btn_confirmar.setEnabled(False)
             dialog._btn_confirmar.setText("Aprovando...")
+
             w = AprovacaoWorker(sol_id, username, dias)
             self._workers.append(w)
             w.sucesso.connect(lambda _: (dialog.accept(), self._workers.clear()))
