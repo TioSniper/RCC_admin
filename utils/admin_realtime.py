@@ -1,19 +1,21 @@
 import asyncio
 import json
 import threading
-from PyQt6.QtCore import QObject, pyqtSignal, QTimer
+from PyQt6.QtCore import QObject, pyqtSignal, QTimer, Qt
 
 
 class AdminRealtime(QObject):
-    # Sinais por tabela — emitem o payload completo para evitar re-fetch
-    solicitacoes_mudou = pyqtSignal(dict)  # {type, record, old_record}
+    solicitacoes_mudou = pyqtSignal(dict)
     usuarios_mudou = pyqtSignal(dict)
     assinaturas_mudou = pyqtSignal(dict)
     acessos_mudou = pyqtSignal(dict)
     logs_mudou = pyqtSignal(dict)
     planos_mudou = pyqtSignal(dict)
     modulos_mudou = pyqtSignal(dict)
-    sessoes_mudou = pyqtSignal(dict)  # para indicador online/offline
+    sessoes_mudou = pyqtSignal(dict)
+
+    # Sinal interno por tabela — emitido da thread asyncio, dispara timer na thread principal
+    _evento_recebido = pyqtSignal(str)
 
     _TABELAS = {
         "solicitacoes": "solicitacoes_mudou",
@@ -26,25 +28,37 @@ class AdminRealtime(QObject):
         "sessoes_ativas": "sessoes_mudou",
     }
 
-    def __init__(self, supabase_url: str, supabase_key: str):
+    def __init__(self, supabase_url: str, supabase_key: str, anon_key: str = ""):
         super().__init__()
-        self._key = supabase_key
+        self._key = supabase_key  # service_role — para operações REST
+        self._anon_key = anon_key or supabase_key  # anon — para websocket Realtime
         self._rodando = False
         self._loop = None
 
         ws = supabase_url.replace("https://", "wss://").replace("http://", "ws://")
-        self._ws_url = f"{ws}/realtime/v1/websocket?apikey={supabase_key}&vsn=1.0.0"
+        # Websocket usa anon_key — service_role não é aceita pelo Realtime
+        self._ws_url = f"{ws}/realtime/v1/websocket?apikey={self._anon_key}&vsn=1.0.0"
 
-        # Debounce por tabela — evita flood de sinais
         self._timers: dict[str, QTimer] = {}
         self._payloads: dict[str, dict] = {}
-        for tabela, nome_sinal in self._TABELAS.items():
+
+        for tabela in self._TABELAS:
             t = QTimer()
             t.setSingleShot(True)
             t.setInterval(150)
-            t.setProperty("tabela", tabela)
             t.timeout.connect(lambda tb=tabela: self._emitir(tb))
             self._timers[tabela] = t
+
+        # QueuedConnection garante que o slot rode na thread principal
+        self._evento_recebido.connect(
+            self._on_evento_recebido,
+            type=Qt.ConnectionType.QueuedConnection,
+        )
+
+    def _on_evento_recebido(self, tabela: str):
+        """Roda sempre na thread principal — seguro para iniciar QTimer."""
+        if tabela in self._timers:
+            self._timers[tabela].start()
 
     def iniciar(self):
         self._rodando = True
@@ -60,8 +74,7 @@ class AdminRealtime(QObject):
         print("[Realtime] Parado.")
 
     def _cancelar_tasks(self):
-        tasks = asyncio.all_tasks(self._loop)
-        for t in tasks:
+        for t in asyncio.all_tasks(self._loop):
             t.cancel()
         self._loop.stop()
 
@@ -100,7 +113,7 @@ class AdminRealtime(QObject):
     async def _conectar(self, websockets):
         async with websockets.connect(
             self._ws_url,
-            additional_headers={"apikey": self._key},
+            additional_headers={"apikey": self._anon_key},
             ping_interval=30,
             ping_timeout=10,
         ) as ws:
@@ -118,7 +131,8 @@ class AdminRealtime(QObject):
                                     {"event": "*", "schema": "public", "table": t}
                                     for t in self._TABELAS
                                 ]
-                            }
+                            },
+                            # Sem access_token — políticas RLS with (true) permitem anon
                         },
                         "ref": str(ref),
                     }
@@ -152,9 +166,13 @@ class AdminRealtime(QObject):
         event = msg.get("event", "")
         payload = msg.get("payload", {})
 
-        if event in ("phx_reply", "phx_close", "heartbeat", "presence_state", "system"):
-            return
-        if event != "postgres_changes":
+        # DEBUG — loga tudo exceto heartbeat
+        if event not in ("heartbeat",):
+            print(
+                f"[Realtime DEBUG] event={event} | topic={msg.get('topic','?')} | tabela={payload.get('data', {}).get('table', '?')} | payload={json.dumps(payload)[:300]}"
+            )
+
+        if event not in ("postgres_changes",):
             return
 
         data = payload.get("data", {})
@@ -164,13 +182,14 @@ class AdminRealtime(QObject):
 
         print(f"[Realtime] {data.get('type','?')} em: {tabela}")
 
-        # Guarda o payload mais recente e reinicia debounce
         self._payloads[tabela] = {
             "type": data.get("type"),
             "record": data.get("record", {}),
             "old_record": data.get("old_record", {}),
         }
-        self._timers[tabela].start()
+
+        # Emite da thread asyncio — QueuedConnection despacha para thread principal
+        self._evento_recebido.emit(tabela)
 
     def _emitir(self, tabela: str):
         nome_sinal = self._TABELAS.get(tabela)
@@ -185,10 +204,12 @@ class AdminRealtime(QObject):
 _instancia: AdminRealtime | None = None
 
 
-def iniciar_realtime(supabase_url: str, supabase_key: str) -> AdminRealtime:
+def iniciar_realtime(
+    supabase_url: str, supabase_key: str, anon_key: str = ""
+) -> AdminRealtime:
     global _instancia
     if _instancia is None:
-        _instancia = AdminRealtime(supabase_url, supabase_key)
+        _instancia = AdminRealtime(supabase_url, supabase_key, anon_key)
         _instancia.iniciar()
     return _instancia
 
