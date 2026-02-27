@@ -49,24 +49,17 @@ class UpdateWorker(QObject):
     sucesso = pyqtSignal()
     erro = pyqtSignal(str)
 
-    def __init__(self, versao, url):
-        super().__init__()
-        self._versao = versao
-        self._url = url
-
     def executar(self):
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
         try:
             from utils.supabase_admin import _cliente
+            import time
 
-            _cliente().rpc(
-                "disparar_update",
-                {
-                    "p_versao": self._versao,
-                    "p_url": self._url,
-                },
+            # Atualiza apenas o timestamp — o cliente busca versão do GitHub
+            _cliente().table("configuracoes").update({"updated_at": "now()"}).eq(
+                "chave", "versao_disponivel"
             ).execute()
             self.sucesso.emit()
         except Exception as e:
@@ -141,7 +134,7 @@ class DashboardController:
             tabela.insertRow(row)
             sol_id = s.get("id", "")
             username = s.get("username", "—")
-            email = s.get("email", "—")
+            email = f"{username}@rcc.app"
             tabela.setItem(row, 0, self._item(username))
             tabela.setItem(row, 1, self._item(email))
             w = QWidget()
@@ -205,47 +198,27 @@ class DashboardController:
     def _dialog_disparar_update(self):
         from telas.dialogs import DialogBase
 
-        dialog = DialogBase("🚀  Disparar Update para Clientes", parent=self.ui)
+        dialog = DialogBase("🚀  Disparar Notificação de Update", parent=self.ui)
 
         lbl_info = QLabel(
-            "Informe a nova versão e a URL de download.\n"
-            "Todos os clientes conectados serão notificados em tempo real."
+            "Todos os clientes com o app aberto receberão\n"
+            "uma notificação de atualização disponível.\n\n"
+            "O cliente buscará automaticamente a versão\n"
+            "mais recente do GitHub."
         )
         lbl_info.setStyleSheet("color: #aaaaaa; font-size: 12px;")
         lbl_info.setWordWrap(True)
 
-        lbl_v = QLabel("Nova versão (ex: 1.2.0):")
-        lbl_v.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
-        inp_versao = QLineEdit()
-        inp_versao.setPlaceholderText("1.2.0")
-        inp_versao.setFixedHeight(36)
-        inp_versao.setStyleSheet(dialog._estilo_input())
-
-        lbl_u = QLabel("URL de download:")
-        lbl_u.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
-        inp_url = QLineEdit()
-        inp_url.setPlaceholderText("https://github.com/TioSniper/RCC/releases/latest")
-        inp_url.setFixedHeight(36)
-        inp_url.setStyleSheet(dialog._estilo_input())
-
         lbl_aviso = QLabel("")
         lbl_aviso.setStyleSheet("color: #ff5c5c; font-size: 11px;")
 
-        for i, w in enumerate([lbl_info, lbl_v, inp_versao, lbl_u, inp_url, lbl_aviso]):
-            dialog._layout_corpo.insertWidget(i, w)
+        dialog._layout_corpo.insertWidget(0, lbl_info)
+        dialog._layout_corpo.insertWidget(1, lbl_aviso)
 
         def _disparar():
-            versao = inp_versao.text().strip()
-            url = inp_url.text().strip()
-            if not versao:
-                lbl_aviso.setText("⚠️  Informe a versão.")
-                return
-            if not url:
-                lbl_aviso.setText("⚠️  Informe a URL de download.")
-                return
             dialog._btn_confirmar.setEnabled(False)
             dialog._btn_confirmar.setText("Disparando...")
-            w = UpdateWorker(versao, url)
+            w = UpdateWorker()
             self._workers.append(w)
             w.sucesso.connect(lambda: (dialog.accept(), self._workers.clear()))
             w.erro.connect(

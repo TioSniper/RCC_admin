@@ -218,13 +218,13 @@ def listar_usuarios() -> list:
         )
         usuarios = []
         for p in perfis.data:
+            # Busca assinatura ativa — inclui básico para exibir plano real na aba usuários
             ass = (
                 _cliente()
                 .table("v_assinaturas")
                 .select("*")
                 .eq("user_id", p["id"])
                 .eq("ativo", True)
-                .neq("plano_id", BASICO_ID)
                 .order("criado_em", desc=True)
                 .limit(1)
                 .execute()
