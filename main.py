@@ -3,17 +3,35 @@ import os
 import traceback
 from dotenv import load_dotenv
 from PyQt6.QtWidgets import QApplication
-
-load_dotenv()
-os.environ["QT_LOGGING_RULES"] = "qt.multimedia.ffmpeg=false"
-
 from telas.principal.principal_ui import PrincipalUI
 from telas.principal.principal_controller import PrincipalController
 from utils.admin_realtime import iniciar_realtime
 
+load_dotenv()
+os.environ["QT_LOGGING_RULES"] = "qt.multimedia.ffmpeg=false"
+
+
+def _set_taskbar_icon():
+    """Define AppUserModelID para o ícone aparecer corretamente na barra de tarefas."""
+    try:
+        import ctypes
+
+        app_id = f"RCC_Admin"
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
+    except Exception:
+        pass
+
 
 def main():
+    _set_taskbar_icon()
+
     app = QApplication(sys.argv)
+
+    from PyQt6.QtGui import QIcon
+    from utils.resource_path import resource_path
+
+    icon = QIcon(resource_path("assets/icons/app.ico"))
+    app.setWindowIcon(icon)
 
     try:
         realtime = iniciar_realtime(
