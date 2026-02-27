@@ -273,6 +273,7 @@ def editar_username(user_id: str, novo_username: str) -> tuple[bool, str]:
 
 def ativar_usuario(user_id: str) -> tuple[bool, str]:
     try:
+        _cliente().auth.admin.update_user_by_id(user_id, {"ban_duration": "none"})
         _cliente().table("perfis").update({"ativo": True}).eq("id", user_id).execute()
         _logs.registrar("ativar_usuario", detalhes={"user_id": user_id})
         return True, "Usuário ativado."
@@ -282,10 +283,12 @@ def ativar_usuario(user_id: str) -> tuple[bool, str]:
 
 def desativar_usuario(user_id: str) -> tuple[bool, str]:
     try:
+        _cliente().auth.admin.update_user_by_id(user_id, {"ban_duration": "876000h"})
         _cliente().table("perfis").update({"ativo": False}).eq("id", user_id).execute()
         _logs.registrar("desativar_usuario", detalhes={"user_id": user_id})
         return True, "Usuário desativado."
     except Exception as e:
+        print(f"[desativar_usuario] ERRO: {e}")
         return False, f"Erro: {e}"
 
 
