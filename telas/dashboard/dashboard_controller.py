@@ -45,6 +45,34 @@ class RejeicaoWorker(QObject):
         self.concluido.emit() if ok else self.erro.emit("Erro ao rejeitar")
 
 
+class UpdateWorker(QObject):
+    sucesso = pyqtSignal()
+    erro = pyqtSignal(str)
+
+    def __init__(self, versao, url):
+        super().__init__()
+        self._versao = versao
+        self._url = url
+
+    def executar(self):
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        try:
+            from utils.supabase_admin import _cliente
+
+            _cliente().rpc(
+                "disparar_update",
+                {
+                    "p_versao": self._versao,
+                    "p_url": self._url,
+                },
+            ).execute()
+            self.sucesso.emit()
+        except Exception as e:
+            self.erro.emit(str(e))
+
+
 class DashboardController:
 
     def __init__(self, ui, svc):
@@ -56,11 +84,12 @@ class DashboardController:
         svc.solicitacoes_mudou.connect(self._carregar)
         svc.sessoes_mudou.connect(self._carregar_sessoes)
 
-        from PyQt6.QtWidgets import QPushButton
-
         btn_att = self.ui.findChild(QPushButton, "btn_atualizar_dashboard")
         if btn_att:
             btn_att.clicked.connect(self._carregar)
+
+        self.ui.btn_disparar_update.clicked.connect(self._dialog_disparar_update)
+
         self._carregar()
 
     def _carregar(self):
@@ -151,7 +180,6 @@ class DashboardController:
             row = tabela.rowCount()
             tabela.insertRow(row)
             expira_raw = dados.get("expira_em", "")
-            dias_txt = "—"
             try:
                 dt = datetime.fromisoformat(expira_raw.replace("Z", "+00:00"))
                 dias = (dt - datetime.now(timezone.utc)).days
@@ -172,6 +200,68 @@ class DashboardController:
             tabela.setItem(row, 3, dias_item)
             tabela.setRowHeight(row, 36)
 
+    # ── Dialog Disparar Update ─────────────────────────────────
+
+    def _dialog_disparar_update(self):
+        from telas.dialogs import DialogBase
+
+        dialog = DialogBase("🚀  Disparar Update para Clientes", parent=self.ui)
+
+        lbl_info = QLabel(
+            "Informe a nova versão e a URL de download.\n"
+            "Todos os clientes conectados serão notificados em tempo real."
+        )
+        lbl_info.setStyleSheet("color: #aaaaaa; font-size: 12px;")
+        lbl_info.setWordWrap(True)
+
+        lbl_v = QLabel("Nova versão (ex: 1.2.0):")
+        lbl_v.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
+        inp_versao = QLineEdit()
+        inp_versao.setPlaceholderText("1.2.0")
+        inp_versao.setFixedHeight(36)
+        inp_versao.setStyleSheet(dialog._estilo_input())
+
+        lbl_u = QLabel("URL de download:")
+        lbl_u.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
+        inp_url = QLineEdit()
+        inp_url.setPlaceholderText("https://github.com/TioSniper/RCC/releases/latest")
+        inp_url.setFixedHeight(36)
+        inp_url.setStyleSheet(dialog._estilo_input())
+
+        lbl_aviso = QLabel("")
+        lbl_aviso.setStyleSheet("color: #ff5c5c; font-size: 11px;")
+
+        for i, w in enumerate([lbl_info, lbl_v, inp_versao, lbl_u, inp_url, lbl_aviso]):
+            dialog._layout_corpo.insertWidget(i, w)
+
+        def _disparar():
+            versao = inp_versao.text().strip()
+            url = inp_url.text().strip()
+            if not versao:
+                lbl_aviso.setText("⚠️  Informe a versão.")
+                return
+            if not url:
+                lbl_aviso.setText("⚠️  Informe a URL de download.")
+                return
+            dialog._btn_confirmar.setEnabled(False)
+            dialog._btn_confirmar.setText("Disparando...")
+            w = UpdateWorker(versao, url)
+            self._workers.append(w)
+            w.sucesso.connect(lambda: (dialog.accept(), self._workers.clear()))
+            w.erro.connect(
+                lambda msg: (
+                    lbl_aviso.setText(f"⚠️  {msg}"),
+                    dialog._btn_confirmar.setEnabled(True),
+                    dialog._btn_confirmar.setText("✓  Confirmar"),
+                )
+            )
+            w.executar()
+
+        dialog._btn_confirmar.clicked.connect(_disparar)
+        dialog.exec()
+
+    # ── Dialogs de solicitações ───────────────────────────────
+
     def _dialog_aprovar(self, sol_id: str, username: str):
         from telas.dialogs import DialogBase
 
@@ -185,10 +275,8 @@ class DashboardController:
         inp_dias.setStyleSheet(dialog._estilo_input())
         lbl_aviso = QLabel("")
         lbl_aviso.setStyleSheet("color: #ff5c5c; font-size: 11px;")
-        dialog._layout_corpo.insertWidget(0, lbl_info)
-        dialog._layout_corpo.insertWidget(1, lbl_dias)
-        dialog._layout_corpo.insertWidget(2, inp_dias)
-        dialog._layout_corpo.insertWidget(3, lbl_aviso)
+        for i, w in enumerate([lbl_info, lbl_dias, inp_dias, lbl_aviso]):
+            dialog._layout_corpo.insertWidget(i, w)
 
         def _salvar():
             try:

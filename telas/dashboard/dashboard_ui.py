@@ -48,12 +48,29 @@ class DashboardUI(TelaBase):
         self._construir()
 
     def _construir(self):
-        # ── Cards de resumo ───────────────────────────────────────
+        # ── Botão 🚀 no header (canto direito) ───────────────
+        self.btn_disparar_update = QPushButton("🚀")
+        self.btn_disparar_update.setFixedSize(38, 38)
+        self.btn_disparar_update.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_disparar_update.setToolTip("Disparar Update para Clientes")
+        self.btn_disparar_update.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #2a3f7a; color: white;
+                border-radius: 8px; font-size: 16px; border: none;
+            }
+            QPushButton:hover { background-color: #7c3aed; }
+        """
+        )
+        # Injeta no layout de ações do cabeçalho da TelaBase
+        self._layout_acoes_cabecalho.addWidget(self.btn_disparar_update)
+
+        # ── Cards de resumo ───────────────────────────────────
         layout_cards = QHBoxLayout()
         layout_cards.setSpacing(16)
 
         self.card_usuarios = CardResumo("👥", "Total de Usuários", "—", "#FFD700")
-        self.card_ativos = CardResumo("🟢", "Usuários Online", "—", "#00ff88")
+        self.card_ativos = CardResumo("✅", "Usuários Ativos", "—", "#00ff88")
         self.card_assinaturas = CardResumo("📋", "Assinaturas Ativas", "—", "#4da6ff")
         self.card_expirando = CardResumo("⚠️", "Expirando em 7 dias", "—", "#ffaa00")
         self.card_expiradas = CardResumo("❌", "Assinaturas Expiradas", "—", "#ff5c5c")
@@ -69,61 +86,35 @@ class DashboardUI(TelaBase):
 
         self._layout_raiz.addLayout(layout_cards)
 
-        # ── Layout inferior: solicitações + expirando ─────────────
-        layout_inferior = QHBoxLayout()
-        layout_inferior.setSpacing(16)
+        # ── Tabelas lado a lado, expandindo até o final ───────
+        layout_tabelas = QHBoxLayout()
+        layout_tabelas.setSpacing(16)
 
-        # ── Painel de solicitações pendentes ──────────────────────
-        frame_solicitacoes = QFrame()
-        frame_solicitacoes.setStyleSheet(
+        # Solicitações pendentes (esquerda)
+        frame_sol = QFrame()
+        frame_sol.setStyleSheet(
             """
             QFrame {
                 background-color: rgba(15, 26, 61, 0.6);
                 border-radius: 12px;
-                border: 1px solid #7c3aed;
+                border: 1px solid #2a3f7a;
             }
             QLabel { border: none; background: transparent; }
         """
         )
-
-        layout_sol = QVBoxLayout(frame_solicitacoes)
+        layout_sol = QVBoxLayout(frame_sol)
         layout_sol.setContentsMargins(20, 16, 20, 16)
         layout_sol.setSpacing(12)
 
-        layout_header_sol = QHBoxLayout()
+        lbl_sol = QLabel("📥  Solicitações Pendentes")
+        lbl_sol.setStyleSheet("color: #FFD700; font-size: 14px; font-weight: bold;")
 
-        lbl_titulo_sol = QLabel("🔔  Solicitações Pendentes")
-        lbl_titulo_sol.setStyleSheet(
-            "color: #a78bfa; font-size: 14px; font-weight: bold;"
-        )
+        self.tabela_solicitacoes = self._criar_tabela(["Usuário", "E-mail", "Ações"])
 
-        self.card_pendentes = QLabel("0")
-        self.card_pendentes.setStyleSheet(
-            """
-            color: white; background-color: #7c3aed;
-            border-radius: 10px; padding: 2px 10px;
-            font-size: 12px; font-weight: bold;
-        """
-        )
-        self.card_pendentes.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.card_pendentes.setFixedHeight(22)
-
-        layout_header_sol.addWidget(lbl_titulo_sol)
-        layout_header_sol.addWidget(self.card_pendentes)
-        layout_header_sol.addStretch()
-
-        self.tabela_solicitacoes = self._criar_tabela(
-            ["Usuário", "Solicitado em", "Aprovar", "Rejeitar"]
-        )
-        self.tabela_solicitacoes.setColumnWidth(0, 120)
-        self.tabela_solicitacoes.setColumnWidth(1, 130)
-        self.tabela_solicitacoes.setColumnWidth(2, 80)
-        self.tabela_solicitacoes.setColumnWidth(3, 80)
-
-        layout_sol.addLayout(layout_header_sol)
+        layout_sol.addWidget(lbl_sol)
         layout_sol.addWidget(self.tabela_solicitacoes)
 
-        # ── Painel de expirando em breve ──────────────────────────
+        # Expirando em breve (direita)
         frame_expirando = QFrame()
         frame_expirando.setStyleSheet(
             """
@@ -135,32 +126,22 @@ class DashboardUI(TelaBase):
             QLabel { border: none; background: transparent; }
         """
         )
-
         layout_exp = QVBoxLayout(frame_expirando)
         layout_exp.setContentsMargins(20, 16, 20, 16)
         layout_exp.setSpacing(12)
 
-        lbl_titulo_exp = QLabel("⚠️  Assinaturas Expirando em Breve")
-        lbl_titulo_exp.setStyleSheet(
-            "color: #ffaa00; font-size: 14px; font-weight: bold;"
-        )
+        lbl_exp = QLabel("⚠️  Assinaturas Expirando em Breve")
+        lbl_exp.setStyleSheet("color: #ffaa00; font-size: 14px; font-weight: bold;")
 
         self.tabela_expirando = self._criar_tabela(
             ["Usuário", "Plano", "Expira em", "Dias Restantes"]
         )
 
-        self.btn_atualizar = self._criar_btn_acao("🔄  Atualizar", "#2a3f7a", "#FFD700")
-        self.btn_atualizar.setObjectName("btn_atualizar_dashboard")
-
-        layout_exp.addWidget(lbl_titulo_exp)
+        layout_exp.addWidget(lbl_exp)
         layout_exp.addWidget(self.tabela_expirando)
 
-        layout_rodape = QHBoxLayout()
-        layout_rodape.addStretch()
-        layout_rodape.addWidget(self.btn_atualizar)
-        layout_exp.addLayout(layout_rodape)
+        layout_tabelas.addWidget(frame_sol)
+        layout_tabelas.addWidget(frame_expirando)
 
-        layout_inferior.addWidget(frame_solicitacoes, stretch=1)
-        layout_inferior.addWidget(frame_expirando, stretch=1)
-
-        self._layout_raiz.addLayout(layout_inferior)
+        # addLayout com stretch=1 faz as tabelas expandirem até o fim
+        self._layout_raiz.addLayout(layout_tabelas, stretch=1)

@@ -400,11 +400,13 @@ def aprovar_solicitacao(sol_id: str, username: str, dias: int) -> tuple[bool, st
             .single()
             .execute()
         )
-        email = sol.data["email"]
+        username = sol.data["username"]
+        senha = sol.data["senha_real"]
+        email = f"{username.lower().strip()}@rcc.app"
         response = _cliente().auth.admin.create_user(
             {
                 "email": email,
-                "password": "Trocar@123",
+                "password": senha,
                 "email_confirm": True,
             }
         )
