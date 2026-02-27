@@ -283,7 +283,9 @@ def ativar_usuario(user_id: str) -> tuple[bool, str]:
 
 def desativar_usuario(user_id: str) -> tuple[bool, str]:
     try:
+        # 1. Ban no Auth — bloqueia novos logins e invalida sessão
         _cliente().auth.admin.update_user_by_id(user_id, {"ban_duration": "876000h"})
+        # 2. Marca perfil como inativo — NÃO toca em assinaturas
         _cliente().table("perfis").update({"ativo": False}).eq("id", user_id).execute()
         _logs.registrar("desativar_usuario", detalhes={"user_id": user_id})
         return True, "Usuário desativado."
