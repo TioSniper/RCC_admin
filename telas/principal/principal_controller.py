@@ -29,12 +29,28 @@ class PrincipalController:
         self._conectar_eventos()
         self._ir_para("dashboard")
 
+    def _make_timer(self, sinal_destino):
+        """Cria um QTimer de debounce 300ms que emite sinal_destino ao disparar."""
+        t = QTimer()
+        t.setSingleShot(True)
+        t.setInterval(300)
+        t.timeout.connect(sinal_destino.emit)
+        self._timers.append(t)
+        return t
+
     def _conectar_realtime(self):
         if not self._realtime:
+            print(
+                "[Principal] Realtime não disponível — atualizações automáticas desativadas"
+            )
             return
+
         rt = self._realtime
         svc = self._svc
 
+        # Cada sinal do Realtime inicia um timer de debounce
+        # Quando o timer dispara, emite o sinal do DataService (sem args)
+        # Os controllers ouvem os sinais do DataService
         mapa = [
             (rt.usuarios_mudou, svc.usuarios_mudou),
             (rt.assinaturas_mudou, svc.assinaturas_mudou),
@@ -47,12 +63,11 @@ class PrincipalController:
         ]
 
         for sinal_rt, sinal_svc in mapa:
-            timer = QTimer()
-            timer.setSingleShot(True)
-            timer.setInterval(300)
-            timer.timeout.connect(sinal_svc.emit)
-            sinal_rt.connect(lambda _, t=timer: t.start())
-            self._timers.append(timer)
+            t = self._make_timer(sinal_svc)
+            # lambda com default capture evita closure bug
+            sinal_rt.connect(lambda payload, _t=t: _t.start())
+
+        print(f"[Principal] Realtime conectado — {len(mapa)} sinais mapeados")
 
     def _carregar_paginas(self):
         svc = self._svc
@@ -121,7 +136,7 @@ class PrincipalController:
             self.ui.btn_maximizar.setText("❐")
 
     def _fechar(self):
-        from utils.supabase_admin import _logs
+        from utils.logs_manager import _logs
 
         try:
             if self._realtime:

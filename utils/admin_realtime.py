@@ -8,22 +8,19 @@ class AdminRealtime(QObject):
     solicitacoes_mudou = pyqtSignal(dict)
     usuarios_mudou = pyqtSignal(dict)
     assinaturas_mudou = pyqtSignal(dict)
-    acessos_mudou = pyqtSignal(dict)
     logs_mudou = pyqtSignal(dict)
     planos_mudou = pyqtSignal(dict)
     modulos_mudou = pyqtSignal(dict)
     sessoes_mudou = pyqtSignal(dict)
     planos_modulos_mudou = pyqtSignal(dict)
+    acessos_mudou = pyqtSignal(dict)  # mantido por compatibilidade
 
-    # Sinal interno por tabela — emitido da thread asyncio, dispara timer na thread principal
-    _evento_recebido = pyqtSignal(str)
+    _sinal_tabela = pyqtSignal(str, dict)  # (tabela, payload) — thread-safe
 
     _TABELAS = {
         "solicitacoes": "solicitacoes_mudou",
         "perfis": "usuarios_mudou",
         "assinaturas": "assinaturas_mudou",
-        "acessos_extras": "acessos_mudou",
-        "logs_admin": "logs_mudou",
         "planos": "planos_mudou",
         "modulos": "modulos_mudou",
         "sessoes_ativas": "sessoes_mudou",
@@ -32,39 +29,42 @@ class AdminRealtime(QObject):
 
     def __init__(self, supabase_url: str, supabase_key: str, anon_key: str = ""):
         super().__init__()
-        self._key = supabase_key  # service_role — para operações REST
-        self._anon_key = anon_key or supabase_key  # anon — para websocket Realtime
+        self._url = supabase_url
+        self._key = supabase_key
+        self._anon = anon_key or supabase_key
         self._rodando = False
         self._loop = None
 
         ws = supabase_url.replace("https://", "wss://").replace("http://", "ws://")
-        # Websocket usa anon_key — service_role não é aceita pelo Realtime
-        self._ws_url = f"{ws}/realtime/v1/websocket?apikey={self._anon_key}&vsn=1.0.0"
+        self._ws_url = f"{ws}/realtime/v1/websocket?apikey={self._anon}&vsn=1.0.0"
 
+        # Debounce por tabela — agrupa rajadas de eventos
         self._timers: dict[str, QTimer] = {}
         self._payloads: dict[str, dict] = {}
 
         for tabela in self._TABELAS:
             t = QTimer()
             t.setSingleShot(True)
-            t.setInterval(150)
+            t.setInterval(200)
             t.timeout.connect(lambda tb=tabela: self._emitir(tb))
             self._timers[tabela] = t
 
-        # QueuedConnection garante que o slot rode na thread principal
-        self._evento_recebido.connect(
-            self._on_evento_recebido,
+        # QueuedConnection: slot roda na thread principal (Qt-safe)
+        self._sinal_tabela.connect(
+            self._on_evento,
             type=Qt.ConnectionType.QueuedConnection,
         )
 
-    def _on_evento_recebido(self, tabela: str):
-        """Roda sempre na thread principal — seguro para iniciar QTimer."""
+    def _on_evento(self, tabela: str, payload: dict):
+        """Sempre na thread principal — seguro iniciar QTimer aqui."""
+        self._payloads[tabela] = payload
         if tabela in self._timers:
             self._timers[tabela].start()
 
     def iniciar(self):
         self._rodando = True
-        threading.Thread(target=self._run_loop, daemon=True).start()
+        t = threading.Thread(target=self._run_loop, daemon=True, name="RealTimeThread")
+        t.start()
         print("[Realtime] Iniciando...")
 
     def parar(self):
@@ -72,24 +72,18 @@ class AdminRealtime(QObject):
         for t in self._timers.values():
             t.stop()
         if self._loop and not self._loop.is_closed():
-            self._loop.call_soon_threadsafe(self._cancelar_tasks)
+            self._loop.call_soon_threadsafe(self._loop.stop)
         print("[Realtime] Parado.")
 
-    def _cancelar_tasks(self):
-        for t in asyncio.all_tasks(self._loop):
-            t.cancel()
-        self._loop.stop()
-
     def _run_loop(self):
+        # Loop asyncio próprio — isolado do Qt
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
         try:
             self._loop.run_until_complete(self._escutar())
-        except (asyncio.CancelledError, RuntimeError):
-            pass
         except Exception as e:
             if self._rodando:
-                print(f"[Realtime] Erro fatal: {e}")
+                print(f"[Realtime] Loop encerrado: {e}")
         finally:
             try:
                 pending = asyncio.all_tasks(self._loop)
@@ -99,7 +93,8 @@ class AdminRealtime(QObject):
                     )
             except Exception:
                 pass
-            self._loop.close()
+            if not self._loop.is_closed():
+                self._loop.close()
 
     async def _escutar(self):
         import websockets
@@ -109,14 +104,14 @@ class AdminRealtime(QObject):
                 await self._conectar(websockets)
             except Exception as e:
                 if self._rodando:
-                    print(f"[Realtime] Reconectando em 5s... ({e})")
+                    print(f"[Realtime] Reconectando em 5s... ({type(e).__name__}: {e})")
                     await asyncio.sleep(5)
 
     async def _conectar(self, websockets):
         async with websockets.connect(
             self._ws_url,
-            additional_headers={"apikey": self._anon_key},
-            ping_interval=30,
+            additional_headers={"apikey": self._anon},
+            ping_interval=25,
             ping_timeout=10,
         ) as ws:
             print("[Realtime] Conectado")
@@ -133,8 +128,7 @@ class AdminRealtime(QObject):
                                     {"event": "*", "schema": "public", "table": t}
                                     for t in self._TABELAS
                                 ]
-                            },
-                            # Sem access_token — políticas RLS with (true) permitem anon
+                            }
                         },
                         "ref": str(ref),
                     }
@@ -144,10 +138,11 @@ class AdminRealtime(QObject):
 
             while self._rodando:
                 try:
-                    raw = await asyncio.wait_for(ws.recv(), timeout=30)
+                    raw = await asyncio.wait_for(ws.recv(), timeout=25)
                     msg = json.loads(raw)
                     self._processar(msg)
                 except asyncio.TimeoutError:
+                    # Heartbeat manual
                     await ws.send(
                         json.dumps(
                             {
@@ -159,22 +154,18 @@ class AdminRealtime(QObject):
                         )
                     )
                     ref += 1
+                except asyncio.CancelledError:
+                    break
                 except Exception as e:
                     if self._rodando:
-                        print(f"[Realtime] Erro recv: {e}")
+                        print(f"[Realtime] Erro recv: {type(e).__name__}: {e}")
                     break
 
     def _processar(self, msg: dict):
         event = msg.get("event", "")
         payload = msg.get("payload", {})
 
-        # DEBUG — loga tudo exceto heartbeat
-        if event not in ("heartbeat",):
-            print(
-                f"[Realtime DEBUG] event={event} | topic={msg.get('topic','?')} | tabela={payload.get('data', {}).get('table', '?')} | payload={json.dumps(payload)[:300]}"
-            )
-
-        if event not in ("postgres_changes",):
+        if event != "postgres_changes":
             return
 
         data = payload.get("data", {})
@@ -184,21 +175,20 @@ class AdminRealtime(QObject):
 
         print(f"[Realtime] {data.get('type','?')} em: {tabela}")
 
-        self._payloads[tabela] = {
+        p = {
             "type": data.get("type"),
             "record": data.get("record", {}),
             "old_record": data.get("old_record", {}),
         }
 
-        # Emite da thread asyncio — QueuedConnection despacha para thread principal
-        self._evento_recebido.emit(tabela)
+        # Emite via sinal thread-safe — chega na thread principal via QueuedConnection
+        self._sinal_tabela.emit(tabela, p)
 
     def _emitir(self, tabela: str):
-        nome_sinal = self._TABELAS.get(tabela)
-        sinal = getattr(self, nome_sinal, None)
-        payload = self._payloads.get(tabela, {})
+        nome = self._TABELAS.get(tabela)
+        sinal = getattr(self, nome, None)
         if sinal:
-            sinal.emit(payload)
+            sinal.emit(self._payloads.get(tabela, {}))
 
 
 # ── Instância global ───────────────────────────────────────────
