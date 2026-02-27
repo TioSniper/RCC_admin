@@ -56,7 +56,11 @@ class DashboardController:
         svc.solicitacoes_mudou.connect(self._carregar)
         svc.sessoes_mudou.connect(self._carregar_sessoes)
 
-        self.ui.btn_atualizar.clicked.connect(self._carregar)
+        from PyQt6.QtWidgets import QPushButton
+
+        btn_att = self.ui.findChild(QPushButton, "btn_atualizar_dashboard")
+        if btn_att:
+            btn_att.clicked.connect(self._carregar)
         self._carregar()
 
     def _carregar(self):

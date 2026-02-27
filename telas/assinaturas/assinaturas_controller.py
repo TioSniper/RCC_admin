@@ -265,6 +265,14 @@ class AssinaturasController:
         )
 
     def _dialog_atribuir(self, user_id, username):
+        from utils.supabase_admin import listar_planos
+
+        self._svc.fetch(
+            listar_planos,
+            lambda planos: self._abrir_dialog_atribuir(user_id, username, planos or []),
+        )
+
+    def _abrir_dialog_atribuir(self, user_id, username, planos):
         from telas.dialogs import DialogBase
 
         dialog = DialogBase("🎯  Atribuir Plano", parent=self.ui)
@@ -275,8 +283,9 @@ class AssinaturasController:
         combo = QComboBox()
         combo.setFixedHeight(36)
         combo.setStyleSheet(self._estilo_combo())
-        for p in self._planos:
-            combo.addItem(p["nome"], p["id"])
+        for p in planos:
+            if p.get("id") != BASICO_ID:
+                combo.addItem(p["nome"], p["id"])
         lbl_dias = QLabel("Dias de acesso (0 = sem expiração):")
         lbl_dias.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
         inp_dias = QLineEdit("30")
@@ -321,6 +330,14 @@ class AssinaturasController:
         dialog.exec()
 
     def _dialog_mudar_plano(self, user_id):
+        from utils.supabase_admin import listar_planos
+
+        self._svc.fetch(
+            listar_planos,
+            lambda planos: self._abrir_dialog_mudar_plano(user_id, planos or []),
+        )
+
+    def _abrir_dialog_mudar_plano(self, user_id, planos):
         from telas.dialogs import DialogBase
 
         dialog = DialogBase("🎯  Mudar Plano", parent=self.ui)
@@ -329,8 +346,9 @@ class AssinaturasController:
         combo = QComboBox()
         combo.setFixedHeight(36)
         combo.setStyleSheet(self._estilo_combo())
-        for p in self._planos:
-            combo.addItem(p["nome"], p["id"])
+        for p in planos:
+            if p.get("id") != BASICO_ID:
+                combo.addItem(p["nome"], p["id"])
         lbl_dias = QLabel("Dias de acesso (0 = sem expiração):")
         lbl_dias.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
         inp_dias = QLineEdit("30")

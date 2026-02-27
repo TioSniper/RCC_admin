@@ -10,10 +10,44 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QObject, pyqtSignal
 from utils.supabase_admin import (
     ativar_usuario,
+    desativar_usuario,
     deletar_usuario,
     resetar_senha,
     criar_usuario,
 )
+
+
+def _criar_usuario_completo(
+    username: str, senha: str, plano_id: str, dias: int
+) -> tuple[bool, str]:
+    """Cria usuário e atribui plano em sequência."""
+    from utils.supabase_admin import criar_usuario
+    from supabase import create_client
+    from dotenv import load_dotenv
+    import os
+
+    load_dotenv()
+    ok, resultado = criar_usuario(username, senha)
+    if not ok:
+        return False, resultado
+    # resultado é o user_id quando ok=True
+    user_id = resultado
+    if plano_id:
+        try:
+            cli = create_client(
+                os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY")
+            )
+            cli.rpc(
+                "atribuir_plano",
+                {
+                    "p_user_id": user_id,
+                    "p_plano_id": plano_id,
+                    "p_dias": dias,
+                },
+            ).execute()
+        except Exception as e:
+            return True, f"Usuário criado mas erro ao atribuir plano: {e}"
+    return True, "Usuário criado."
 
 
 class UsuarioWorker(QObject):
@@ -85,7 +119,16 @@ class UsuariosController:
         self._preencher(usuarios, sessoes)
 
     def _preencher(self, usuarios, sessoes):
-        ids_online = {s.get("user_id") for s in sessoes}
+        from datetime import datetime, timezone
+
+        # sessoes pode ser lista de dicts ou lista de strings (user_id direto)
+        ids_online = set()
+        for s in sessoes or []:
+            if isinstance(s, dict):
+                ids_online.add(s.get("user_id"))
+            elif isinstance(s, str):
+                ids_online.add(s)
+
         tabela = self.ui.tabela
         tabela.setRowCount(0)
         for u in usuarios:
@@ -99,6 +142,26 @@ class UsuariosController:
             ass = u.get("assinatura") or {}
             plano = ass.get("plano_nome", "Sem plano")
 
+            # Expira em
+            expira_txt = "—"
+            if ass.get("expira_em"):
+                try:
+                    dt = datetime.fromisoformat(ass["expira_em"].replace("Z", "+00:00"))
+                    expira_txt = dt.strftime("%d/%m/%Y")
+                except Exception:
+                    pass
+            elif ass.get("plano_id"):
+                expira_txt = "Sem expiração"
+
+            # Cadastro
+            cadastro_txt = "—"
+            if u.get("criado_em"):
+                try:
+                    dt = datetime.fromisoformat(u["criado_em"].replace("Z", "+00:00"))
+                    cadastro_txt = dt.strftime("%d/%m/%Y")
+                except Exception:
+                    pass
+
             status_txt = (
                 "🟢 Online" if online else ("✅ Ativo" if ativo else "❌ Inativo")
             )
@@ -110,11 +173,15 @@ class UsuariosController:
             )
             status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
+            # col 0-5: dados
             tabela.setItem(row, 0, self._item(username))
             tabela.setItem(row, 1, self._item(email))
-            tabela.setItem(row, 2, self._item(plano))
-            tabela.setItem(row, 3, status_item)
+            tabela.setItem(row, 2, status_item)
+            tabela.setItem(row, 3, self._item(plano))
+            tabela.setItem(row, 4, self._item(expira_txt))
+            tabela.setItem(row, 5, self._item(cadastro_txt))
 
+            # col 6: ações
             w = QWidget()
             l = QHBoxLayout(w)
             l.setContentsMargins(4, 2, 4, 2)
@@ -151,11 +218,14 @@ class UsuariosController:
             l.addWidget(btn_senha)
             l.addWidget(btn_del)
             l.addStretch()
-            tabela.setCellWidget(row, 4, w)
+            tabela.setCellWidget(row, 6, w)
             tabela.setRowHeight(row, 40)
 
     def _toggle_usuario(self, uid: str, ativo: bool):
-        w = UsuarioWorker(ativar_usuario, uid, not ativo)
+        from utils.supabase_admin import desativar_usuario
+
+        fn = desativar_usuario if ativo else ativar_usuario
+        w = UsuarioWorker(fn, uid)
         self._workers.append(w)
         w.sucesso.connect(lambda: self._workers.clear())
         w.executar()
@@ -219,8 +289,7 @@ class UsuariosController:
             return inp
 
         inp_user = _campo("Username:", "ex: joao123", 0)
-        inp_email = _campo("Email:", "ex: joao@email.com", 1)
-        inp_senha = _campo("Senha:", "mínimo 6 caracteres", 2)
+        inp_senha = _campo("Senha:", "mínimo 6 caracteres", 1)
         from PyQt6.QtWidgets import QComboBox
 
         lbl_plano = QLabel("Plano inicial:")
@@ -244,15 +313,14 @@ class UsuariosController:
         lbl_aviso = QLabel("")
         lbl_aviso.setStyleSheet("color: #ff5c5c; font-size: 11px;")
         for i, wg in enumerate(
-            [lbl_plano, combo, lbl_dias, inp_dias, lbl_aviso], start=6
+            [lbl_plano, combo, lbl_dias, inp_dias, lbl_aviso], start=4
         ):
             dialog._layout_corpo.insertWidget(i, wg)
 
         def _salvar():
             u = inp_user.text().strip()
-            e = inp_email.text().strip()
             s = inp_senha.text().strip()
-            if not u or not e or len(s) < 6:
+            if not u or len(s) < 6:
                 lbl_aviso.setText("⚠️  Preencha todos os campos (senha mín. 6 chars).")
                 return
             try:
@@ -262,7 +330,7 @@ class UsuariosController:
                 return
             dialog._btn_confirmar.setEnabled(False)
             dialog._btn_confirmar.setText("Criando...")
-            w = UsuarioWorker(criar_usuario, u, e, s, combo.currentData(), dias)
+            w = UsuarioWorker(_criar_usuario_completo, u, s, combo.currentData(), dias)
             self._workers.append(w)
             w.sucesso.connect(lambda: (dialog.accept(), self._workers.clear()))
             w.erro.connect(

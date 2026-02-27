@@ -175,7 +175,9 @@ class PlanosController:
         lbl_mod.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
         dialog._layout_corpo.insertWidget(4, lbl_mod)
         checks = {}
-        for i, m in enumerate(self._modulos):
+        from utils.supabase_admin import listar_modulos as _lm
+
+        for i, m in enumerate(_lm()):
             cb = QCheckBox(m["nome"])
             cb.setStyleSheet("color: white; font-size: 12px;")
             dialog._layout_corpo.insertWidget(5 + i, cb)
@@ -237,13 +239,16 @@ class PlanosController:
 
     def _dialog_modulos(self, pid, modulos_atuais):
         from telas.dialogs import DialogBase
+        from utils.supabase_admin import listar_modulos
 
         dialog = DialogBase("🧩  Módulos do Plano", parent=self.ui)
         lbl = QLabel("Selecione os módulos incluídos:")
         lbl.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
         dialog._layout_corpo.insertWidget(0, lbl)
         checks = {}
-        for i, m in enumerate(self._modulos):
+        # Busca módulos frescos do banco ao abrir o dialog
+        modulos_frescos = listar_modulos()
+        for i, m in enumerate(modulos_frescos):
             cb = QCheckBox(m["nome"])
             cb.setChecked(m["id"] in modulos_atuais)
             cb.setStyleSheet("color: white; font-size: 12px;")

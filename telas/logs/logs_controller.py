@@ -55,10 +55,10 @@ class LogsController:
                 criado = dt.strftime("%d/%m/%Y %H:%M")
             except Exception:
                 pass
-            tabela.setItem(row, 0, self._item(l.get("username", "—")))
+            tabela.setItem(row, 0, self._item(criado))
             tabela.setItem(row, 1, self._item(l.get("acao", "—")))
-            tabela.setItem(row, 2, self._item(str(l.get("detalhes", "") or "")))
-            tabela.setItem(row, 3, self._item(criado))
+            tabela.setItem(row, 2, self._item(l.get("username", "—")))
+            tabela.setItem(row, 3, self._item(str(l.get("detalhes", "") or "")))
             tabela.setRowHeight(row, 36)
 
     def _item(self, texto):
