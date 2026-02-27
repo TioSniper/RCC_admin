@@ -1,5 +1,4 @@
 import threading
-from datetime import datetime, timezone
 from PyQt6.QtWidgets import (
     QTableWidgetItem,
     QWidget,
@@ -7,107 +6,114 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QLabel,
     QLineEdit,
-    QComboBox,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QObject, pyqtSignal
 from utils.supabase_admin import (
     ativar_usuario,
-    desativar_usuario,
-    resetar_senha,
     deletar_usuario,
-    listar_planos,
-    criar_assinatura,
+    resetar_senha,
     criar_usuario,
 )
 
 
+class UsuarioWorker(QObject):
+    sucesso = pyqtSignal()
+    erro = pyqtSignal(str)
+
+    def __init__(self, fn, *args):
+        super().__init__()
+        self._fn = fn
+        self._args = args
+
+    def executar(self):
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        try:
+            ok, msg = self._fn(*self._args)
+            self.sucesso.emit() if ok else self.erro.emit(msg)
+        except Exception as e:
+            self.erro.emit(str(e))
+
+
 class UsuariosController:
 
-    def __init__(self, ui, store):
+    def __init__(self, ui, svc):
         self.ui = ui
-        self._store = store
+        self._svc = svc
+        self._workers = []
 
-        # Conecta sinais do store
-        store.usuarios_atualizados.connect(self._renderizar)
-        store.sessoes_atualizadas.connect(self._renderizar)
-        store.carregamento_completo.connect(self._renderizar)
+        svc.usuarios_mudou.connect(self._carregar)
+        svc.sessoes_mudou.connect(self._carregar)
 
-        self._conectar_eventos()
-
-        # Se store já tem dados, renderiza imediato
-        if store.usuarios:
-            self._renderizar()
-
-    def _conectar_eventos(self):
-        self.ui.btn_refresh.clicked.connect(lambda: self._store.carregar_tudo())
+        self.ui.btn_refresh.clicked.connect(self._carregar)
         self.ui.btn_novo.clicked.connect(self._dialog_novo_usuario)
         self.ui.input_busca.textChanged.connect(self._filtrar)
 
-    def _filtrar(self, texto: str):
-        if not texto:
-            self._renderizar()
-            return
-        filtrados = [
-            u
-            for u in self._store.usuarios
-            if texto.lower() in (u.get("username") or "").lower()
-            or texto.lower() in (u.get("email") or "").lower()
-        ]
-        self._renderizar(filtrados)
+        self._todos = []
+        self._carregar()
 
-    def _renderizar(self, usuarios=None):
-        if usuarios is None:
-            usuarios = self._store.usuarios
-        online = self._store.sessoes
+    def _carregar(self):
+        from utils.supabase_admin import listar_usuarios, listar_sessoes_ativas
+
+        self._svc.fetch(
+            lambda: {"usuarios": listar_usuarios(), "sessoes": listar_sessoes_ativas()},
+            self._renderizar,
+        )
+
+    def _filtrar(self, texto: str):
+        if not self._todos:
+            return
+        filtrados = (
+            [
+                u
+                for u in self._todos
+                if texto.lower() in (u.get("username") or "").lower()
+                or texto.lower() in (u.get("email") or "").lower()
+            ]
+            if texto
+            else self._todos
+        )
+        self._preencher(filtrados, [])
+
+    def _renderizar(self, dados):
+        if not dados:
+            return
+        usuarios = dados.get("usuarios", [])
+        sessoes = dados.get("sessoes", [])
+        self._todos = usuarios
+        self._preencher(usuarios, sessoes)
+
+    def _preencher(self, usuarios, sessoes):
+        ids_online = {s.get("user_id") for s in sessoes}
         tabela = self.ui.tabela
         tabela.setRowCount(0)
-
         for u in usuarios:
             row = tabela.rowCount()
             tabela.insertRow(row)
-            uid = u["id"]
-            username = u.get("username") or "—"
+            uid = u.get("id", "")
+            username = u.get("username", "—")
             email = u.get("email", "—")
             ativo = u.get("ativo", False)
+            online = uid in ids_online
             ass = u.get("assinatura") or {}
-            plano = ass.get("plano_nome") or "Sem plano"
-            expira = "—"
-            cadastro = "—"
+            plano = ass.get("plano_nome", "Sem plano")
 
-            if ass.get("expira_em"):
-                try:
-                    dt = datetime.fromisoformat(ass["expira_em"].replace("Z", "+00:00"))
-                    expira = dt.strftime("%d/%m/%Y")
-                except Exception:
-                    pass
-            elif ass.get("plano_nome"):
-                expira = "Sem expiração"
-
-            if u.get("criado_em"):
-                try:
-                    dt = datetime.fromisoformat(u["criado_em"].replace("Z", "+00:00"))
-                    cadastro = dt.strftime("%d/%m/%Y")
-                except Exception:
-                    pass
-
-            esta_online = uid in online
-            if esta_online:
-                status_txt, status_cor = "🟢 Online", Qt.GlobalColor.green
-            elif ativo:
-                status_txt, status_cor = "✅ Ativo", Qt.GlobalColor.darkGreen
-            else:
-                status_txt, status_cor = "❌ Inativo", Qt.GlobalColor.red
-
+            status_txt = (
+                "🟢 Online" if online else ("✅ Ativo" if ativo else "❌ Inativo")
+            )
             status_item = QTableWidgetItem(status_txt)
-            status_item.setForeground(status_cor)
+            status_item.setForeground(
+                Qt.GlobalColor.green
+                if online
+                else Qt.GlobalColor.yellow if ativo else Qt.GlobalColor.red
+            )
             status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
             tabela.setItem(row, 0, self._item(username))
             tabela.setItem(row, 1, self._item(email))
-            tabela.setItem(row, 2, status_item)
-            tabela.setItem(row, 3, self._item(plano))
-            tabela.setItem(row, 4, self._item(expira))
-            tabela.setItem(row, 5, self._item(cadastro))
+            tabela.setItem(row, 2, self._item(plano))
+            tabela.setItem(row, 3, status_item)
 
             w = QWidget()
             l = QHBoxLayout(w)
@@ -119,11 +125,11 @@ class UsuariosController:
                 b.setFixedHeight(26)
                 b.setCursor(Qt.CursorShape.PointingHandCursor)
                 b.setStyleSheet(
-                    f"""
-                    QPushButton {{ background-color: {cor}; color: white;
-                        border-radius: 5px; font-size: 11px;
-                        border: none; padding: 0 8px; }}
-                """
+                    f"""QPushButton {{
+                    background-color: {cor}; color: white;
+                    border-radius: 5px; font-size: 11px;
+                    border: none; padding: 0 8px;
+                }}"""
                 )
                 return b
 
@@ -145,26 +151,26 @@ class UsuariosController:
             l.addWidget(btn_senha)
             l.addWidget(btn_del)
             l.addStretch()
-            tabela.setCellWidget(row, 6, w)
+            tabela.setCellWidget(row, 4, w)
             tabela.setRowHeight(row, 40)
 
-    def _toggle_usuario(self, user_id: str, ativo: bool):
-        def _run():
-            desativar_usuario(user_id) if ativo else ativar_usuario(user_id)
+    def _toggle_usuario(self, uid: str, ativo: bool):
+        w = UsuarioWorker(ativar_usuario, uid, not ativo)
+        self._workers.append(w)
+        w.sucesso.connect(lambda: self._workers.clear())
+        w.executar()
 
-        threading.Thread(target=_run, daemon=True).start()
-
-    def _dialog_resetar_senha(self, user_id: str):
+    def _dialog_resetar_senha(self, uid: str):
         from telas.dialogs import DialogBase
 
         dialog = DialogBase("🔑  Resetar Senha", parent=self.ui)
         lbl = QLabel("Nova senha:")
         lbl.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
         inp = QLineEdit()
-        inp.setEchoMode(QLineEdit.EchoMode.Password)
         inp.setPlaceholderText("••••••••")
         inp.setFixedHeight(36)
         inp.setStyleSheet(dialog._estilo_input())
+        inp.setEchoMode(QLineEdit.EchoMode.Password)
         lbl_aviso = QLabel("")
         lbl_aviso.setStyleSheet("color: #ff5c5c; font-size: 11px;")
         dialog._layout_corpo.insertWidget(0, lbl)
@@ -172,110 +178,117 @@ class UsuariosController:
         dialog._layout_corpo.insertWidget(2, lbl_aviso)
 
         def _salvar():
-            nova = inp.text().strip()
-            if len(nova) < 6:
+            senha = inp.text().strip()
+            if len(senha) < 6:
                 lbl_aviso.setText("⚠️  Mínimo 6 caracteres.")
                 return
-            ok, _ = resetar_senha(user_id, nova)
-            dialog.accept() if ok else lbl_aviso.setText("⚠️  Erro ao resetar senha.")
+            dialog._btn_confirmar.setEnabled(False)
+            dialog._btn_confirmar.setText("Salvando...")
+            w = UsuarioWorker(resetar_senha, uid, senha)
+            self._workers.append(w)
+            w.sucesso.connect(lambda: (dialog.accept(), self._workers.clear()))
+            w.erro.connect(
+                lambda msg: (
+                    lbl_aviso.setText(f"⚠️  {msg}"),
+                    dialog._btn_confirmar.setEnabled(True),
+                    dialog._btn_confirmar.setText("✓  Confirmar"),
+                )
+            )
+            w.executar()
 
         dialog._btn_confirmar.clicked.connect(_salvar)
         dialog.exec()
 
-    def _confirmar_deletar(self, user_id: str, username: str):
-        from telas.dialogs import DialogConfirmacao
-
-        if DialogConfirmacao(
-            f"Deseja deletar '{username}'?\nEsta ação não pode ser desfeita.",
-            parent=self.ui,
-        ).exec():
-            threading.Thread(
-                target=lambda: deletar_usuario(user_id), daemon=True
-            ).start()
-
     def _dialog_novo_usuario(self):
         from telas.dialogs import DialogBase
+        from utils.supabase_admin import listar_planos
+        import os
 
+        BASICO_ID = os.getenv("PLANO_BASICO_ID", "11111111-1111-1111-1111-111111111111")
         dialog = DialogBase("➕  Novo Usuário", parent=self.ui)
 
-        def _campo(lbl_txt, ph, idx, senha=False):
+        def _campo(lbl_txt, ph, idx):
             lbl = QLabel(lbl_txt)
             lbl.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
             inp = QLineEdit()
             inp.setPlaceholderText(ph)
             inp.setFixedHeight(36)
             inp.setStyleSheet(dialog._estilo_input())
-            if senha:
-                inp.setEchoMode(QLineEdit.EchoMode.Password)
             dialog._layout_corpo.insertWidget(idx * 2, lbl)
             dialog._layout_corpo.insertWidget(idx * 2 + 1, inp)
             return inp
 
-        inp_user = _campo("Username:", "ex: joaosilva", 0)
-        inp_senha = _campo("Senha:", "••••••••", 1, senha=True)
+        inp_user = _campo("Username:", "ex: joao123", 0)
+        inp_email = _campo("Email:", "ex: joao@email.com", 1)
+        inp_senha = _campo("Senha:", "mínimo 6 caracteres", 2)
+        from PyQt6.QtWidgets import QComboBox
 
         lbl_plano = QLabel("Plano inicial:")
         lbl_plano.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
         combo = QComboBox()
         combo.setFixedHeight(36)
         combo.setStyleSheet(
-            """
-            QComboBox { background-color: rgba(255,255,255,0.05);
-                border: 1px solid #2a3f7a; border-radius: 8px;
-                color: white; padding: 0 12px; font-size: 12px; }
+            """QComboBox { background-color: rgba(255,255,255,0.05);
+            border: 1px solid #2a3f7a; border-radius: 8px; color: white; padding: 0 12px; }
             QComboBox::drop-down { border: none; }
-            QComboBox QAbstractItemView { background-color: #1a2854;
-                color: white; border: 1px solid #FFD700; }
-        """
+            QComboBox QAbstractItemView { background-color: #1a2854; color: white; border: 1px solid #FFD700; }"""
         )
-        combo.addItem("Sem plano", None)
-        for p in self._store.planos:
-            combo.addItem(p["nome"], p["id"])
-
-        lbl_dias = QLabel("Dias de acesso (0 = sem expiração):")
+        for p in listar_planos():
+            if p["id"] != BASICO_ID:
+                combo.addItem(p["nome"], p["id"])
+        lbl_dias = QLabel("Dias (0 = sem expiração):")
         lbl_dias.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
         inp_dias = QLineEdit("0")
         inp_dias.setFixedHeight(36)
         inp_dias.setStyleSheet(dialog._estilo_input())
-
-        dialog._layout_corpo.insertWidget(4, lbl_plano)
-        dialog._layout_corpo.insertWidget(5, combo)
-        dialog._layout_corpo.insertWidget(6, lbl_dias)
-        dialog._layout_corpo.insertWidget(7, inp_dias)
-
         lbl_aviso = QLabel("")
         lbl_aviso.setStyleSheet("color: #ff5c5c; font-size: 11px;")
-        dialog._layout_corpo.insertWidget(8, lbl_aviso)
+        for i, wg in enumerate(
+            [lbl_plano, combo, lbl_dias, inp_dias, lbl_aviso], start=6
+        ):
+            dialog._layout_corpo.insertWidget(i, wg)
 
         def _salvar():
-            username = inp_user.text().strip()
-            senha = inp_senha.text().strip()
-            plano_id = combo.currentData()
+            u = inp_user.text().strip()
+            e = inp_email.text().strip()
+            s = inp_senha.text().strip()
+            if not u or not e or len(s) < 6:
+                lbl_aviso.setText("⚠️  Preencha todos os campos (senha mín. 6 chars).")
+                return
             try:
-                dias = int(inp_dias.text().strip() or "0")
-                if dias < 0:
-                    raise ValueError
+                dias = int(inp_dias.text().strip())
             except ValueError:
                 lbl_aviso.setText("⚠️  Dias inválido.")
                 return
-            if not username or not senha:
-                lbl_aviso.setText("⚠️  Preencha username e senha.")
-                return
-            if len(senha) < 6:
-                lbl_aviso.setText("⚠️  Senha mínima de 6 caracteres.")
-                return
-            ok, resultado = criar_usuario(username, senha)
-            if not ok:
-                lbl_aviso.setText(f"⚠️  {resultado}")
-                return
-            if plano_id:
-                criar_assinatura(resultado, plano_id, dias)
-            dialog.accept()
+            dialog._btn_confirmar.setEnabled(False)
+            dialog._btn_confirmar.setText("Criando...")
+            w = UsuarioWorker(criar_usuario, u, e, s, combo.currentData(), dias)
+            self._workers.append(w)
+            w.sucesso.connect(lambda: (dialog.accept(), self._workers.clear()))
+            w.erro.connect(
+                lambda msg: (
+                    lbl_aviso.setText(f"⚠️  {msg}"),
+                    dialog._btn_confirmar.setEnabled(True),
+                    dialog._btn_confirmar.setText("✓  Confirmar"),
+                )
+            )
+            w.executar()
 
         dialog._btn_confirmar.clicked.connect(_salvar)
         dialog.exec()
 
-    def _item(self, texto: str) -> QTableWidgetItem:
+    def _confirmar_deletar(self, uid: str, username: str):
+        from telas.dialogs import DialogConfirmacao
+
+        if DialogConfirmacao(
+            f"Deletar usuário '{username}'? Esta ação é irreversível.", parent=self.ui
+        ).exec():
+            w = UsuarioWorker(deletar_usuario, uid)
+            self._workers.append(w)
+            w.sucesso.connect(lambda: self._workers.clear())
+            w.executar()
+
+    def _item(self, texto):
         item = QTableWidgetItem(str(texto))
         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         return item

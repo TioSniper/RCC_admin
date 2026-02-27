@@ -25,49 +25,51 @@ class ModulosWorker(QObject):
         ok, msg = criar_modulo(id_, nome, desc)
         self.salvar_pronto.emit(ok, msg)
 
-    def editar(self, modulo_id, nome, desc):
-        ok, _ = editar_modulo(modulo_id, nome, desc)
+    def editar(self, mid, nome, desc):
+        ok, _ = editar_modulo(mid, nome, desc)
         self.editar_pronto.emit(ok)
 
-    def toggle(self, modulo_id, ativo):
-        ativar_modulo(modulo_id, not ativo)
+    def toggle(self, mid, ativo):
+        ativar_modulo(mid, not ativo)
         self.toggle_pronto.emit()
 
-    def excluir(self, modulo_id):
-        ok, msg = excluir_modulo(modulo_id)
+    def excluir(self, mid):
+        ok, msg = excluir_modulo(mid)
         self.excluir_pronto.emit(ok, msg)
 
 
 class ModulosController:
 
-    def __init__(self, ui, store, realtime=None):
+    def __init__(self, ui, svc, realtime=None):
         self.ui = ui
-        self._store = store
+        self._svc = svc
 
         self.thread = QThread()
         self.worker = ModulosWorker()
         self.worker.moveToThread(self.thread)
         self.worker.salvar_pronto.connect(self._finalizar_salvar)
         self.worker.editar_pronto.connect(self._finalizar_editar)
-        self.worker.toggle_pronto.connect(self._renderizar)
+        self.worker.toggle_pronto.connect(self._carregar)
         self.worker.excluir_pronto.connect(self._finalizar_exclusao)
         self.thread.start()
 
-        store.modulos_atualizados.connect(self._renderizar)
-        store.carregamento_completo.connect(self._renderizar)
+        svc.modulos_mudou.connect(self._carregar)
 
-        self._conectar_eventos()
-        if store.modulos:
-            self._renderizar()
+        self.ui.btn_refresh.clicked.connect(self._carregar)
+        self.ui.btn_novo.clicked.connect(self._dialog_novo_modulo)
+        self._carregar()
 
-    def _conectar_eventos(self):
-        self.ui.btn_refresh.clicked.connect(lambda: self._store.carregar_tudo())
-        self.ui.btn_novo.clicked.connect(self._dialog_novo)
+    def _carregar(self):
+        from utils.supabase_admin import listar_modulos
 
-    def _renderizar(self):
+        self._svc.fetch(listar_modulos, self._renderizar)
+
+    def _renderizar(self, modulos):
+        if modulos is None:
+            return
         tabela = self.ui.tabela
         tabela.setRowCount(0)
-        for m in self._store.modulos:
+        for m in modulos:
             row = tabela.rowCount()
             tabela.insertRow(row)
             ativo = m.get("ativo", True)
@@ -115,7 +117,7 @@ class ModulosController:
                 lambda _, mid=modulo_id, a=ativo: self.worker.toggle(mid, a)
             )
             btn_excluir.clicked.connect(
-                lambda _, mid=modulo_id, n=m.get("nome", ""): self._confirmar_exclusao(
+                lambda _, mid=modulo_id, n=m.get("nome", ""): self._dialog_excluir(
                     mid, n
                 )
             )
@@ -127,7 +129,7 @@ class ModulosController:
             tabela.setCellWidget(row, 4, w)
             tabela.setRowHeight(row, 40)
 
-    def _dialog_novo(self):
+    def _dialog_novo_modulo(self):
         from telas.dialogs import DialogBase
 
         dialog = DialogBase("➕  Novo Módulo", parent=self.ui)
@@ -143,20 +145,24 @@ class ModulosController:
             dialog._layout_corpo.insertWidget(idx * 2 + 1, inp)
             return inp
 
-        inp_id = _campo("ID do módulo:", "ex: novo_modulo", 0)
-        inp_nome = _campo("Nome:", "ex: Novo Módulo", 1)
-        inp_desc = _campo("Descrição:", "ex: Descrição...", 2)
+        inp_id = _campo("ID do módulo:", "ex: monitor_mercado", 0)
+        inp_nome = _campo("Nome:", "ex: Monitor de Mercado", 1)
+        inp_desc = _campo("Descrição:", "ex: Acompanhe ativos em tempo real", 2)
         lbl_aviso = QLabel("")
         lbl_aviso.setStyleSheet("color: #ff5c5c; font-size: 11px;")
-        dialog._layout_corpo.insertWidget(6, lbl_aviso)
+        dialog._layout_corpo.addWidget(lbl_aviso)
 
         def _salvar():
-            if not inp_id.text().strip() or not inp_nome.text().strip():
-                lbl_aviso.setText("⚠️  Preencha ID e Nome.")
+            mid = inp_id.text().strip()
+            nome = inp_nome.text().strip()
+            if not mid or not nome:
+                lbl_aviso.setText("⚠️  ID e Nome são obrigatórios.")
                 return
             self._dialog_ref = dialog
             self._lbl_ref = lbl_aviso
-            self.worker.salvar(inp_id.text(), inp_nome.text(), inp_desc.text())
+            dialog._btn_confirmar.setEnabled(False)
+            dialog._btn_confirmar.setText("Salvando...")
+            self.worker.salvar(mid, nome, inp_desc.text())
 
         dialog._btn_confirmar.clicked.connect(_salvar)
         dialog.exec()
@@ -166,8 +172,10 @@ class ModulosController:
             self._dialog_ref.accept()
         else:
             self._lbl_ref.setText(f"⚠️  {msg}")
+            self._dialog_ref._btn_confirmar.setEnabled(True)
+            self._dialog_ref._btn_confirmar.setText("✓  Confirmar")
 
-    def _dialog_editar(self, modulo_id, nome, descricao):
+    def _dialog_editar(self, mid, nome, descricao):
         from telas.dialogs import DialogBase
 
         dialog = DialogBase("✏️  Editar Módulo", parent=self.ui)
@@ -187,7 +195,7 @@ class ModulosController:
 
         def _salvar():
             self._dialog_ref = dialog
-            self.worker.editar(modulo_id, inp_nome.text(), inp_desc.text())
+            self.worker.editar(mid, inp_nome.text(), inp_desc.text())
 
         dialog._btn_confirmar.clicked.connect(_salvar)
         dialog.exec()
@@ -196,14 +204,13 @@ class ModulosController:
         if ok:
             self._dialog_ref.accept()
 
-    def _confirmar_exclusao(self, modulo_id: str, nome: str):
+    def _dialog_excluir(self, mid, nome):
         from telas.dialogs import DialogBase
 
         dialog = DialogBase("🗑️  Excluir Módulo", parent=self.ui)
-        from PyQt6.QtWidgets import QLabel
-
         lbl = QLabel(
-            f"Tem certeza que deseja excluir o módulo <b style='color:#FFD700'>{nome}</b>?"
+            f"Excluir o módulo <b style='color:#FFD700'>{nome}</b>?<br>"
+            "<small>Falha se estiver vinculado a algum plano.</small>"
         )
         lbl.setStyleSheet("color: #ccc; font-size: 12px;")
         lbl.setWordWrap(True)
@@ -222,12 +229,12 @@ class ModulosController:
             self._lbl_ref = lbl_aviso
             dialog._btn_confirmar.setEnabled(False)
             dialog._btn_confirmar.setText("Excluindo...")
-            self.worker.excluir(modulo_id)
+            self.worker.excluir(mid)
 
         dialog._btn_confirmar.clicked.connect(_confirmar)
         dialog.exec()
 
-    def _finalizar_exclusao(self, ok: bool, msg: str):
+    def _finalizar_exclusao(self, ok, msg):
         if ok:
             self._dialog_ref.accept()
         else:

@@ -1,5 +1,4 @@
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import QTimer
 
 from telas.dashboard.dashboard_ui import DashboardUI
 from telas.dashboard.dashboard_controller import DashboardController
@@ -13,7 +12,7 @@ from telas.modulos.modulos_ui import ModulosUI
 from telas.modulos.modulos_controller import ModulosController
 from telas.logs.logs_ui import LogsUI
 from telas.logs.logs_controller import LogsController
-from utils.cache_store import obter_store
+from utils.data_service import obter_service
 
 
 class PrincipalController:
@@ -22,45 +21,50 @@ class PrincipalController:
         self.ui = ui
         self._realtime = realtime
         self._paginas = {}
+        self._timers = []
 
-        # ── Inicializa store e conecta Realtime ────────────────
-        self._store = obter_store()
-        self._conectar_realtime_ao_store()
-
-        # ── Carrega dados (todas as queries em paralelo) ───────
-        self._store.carregar_tudo()
-
+        self._svc = obter_service()
+        self._conectar_realtime()
         self._carregar_paginas()
         self._conectar_eventos()
         self._ir_para("dashboard")
 
-    def _conectar_realtime_ao_store(self):
-        """Realtime atualiza o store — store notifica os controllers via sinais."""
+    def _conectar_realtime(self):
         if not self._realtime:
             return
         rt = self._realtime
-        s = self._store
+        svc = self._svc
 
-        rt.usuarios_mudou.connect(s.on_usuario_mudou)
-        rt.assinaturas_mudou.connect(s.on_assinatura_mudou)
-        rt.sessoes_mudou.connect(s.on_sessao_mudou)
-        rt.planos_mudou.connect(s.on_plano_mudou)
-        rt.modulos_mudou.connect(s.on_modulo_mudou)
-        rt.planos_modulos_mudou.connect(s.on_planos_modulos_mudou)
-        rt.solicitacoes_mudou.connect(s.on_solicitacao_mudou)
-        rt.logs_mudou.connect(s.on_log_mudou)
+        mapa = [
+            (rt.usuarios_mudou, svc.usuarios_mudou),
+            (rt.assinaturas_mudou, svc.assinaturas_mudou),
+            (rt.planos_mudou, svc.planos_mudou),
+            (rt.planos_modulos_mudou, svc.planos_mudou),
+            (rt.modulos_mudou, svc.modulos_mudou),
+            (rt.logs_mudou, svc.logs_mudou),
+            (rt.solicitacoes_mudou, svc.solicitacoes_mudou),
+            (rt.sessoes_mudou, svc.sessoes_mudou),
+        ]
+
+        for sinal_rt, sinal_svc in mapa:
+            timer = QTimer()
+            timer.setSingleShot(True)
+            timer.setInterval(300)
+            timer.timeout.connect(sinal_svc.emit)
+            sinal_rt.connect(lambda _, t=timer: t.start())
+            self._timers.append(timer)
 
     def _carregar_paginas(self):
-        s = self._store
+        svc = self._svc
         rt = self._realtime
 
         paginas = {
-            "dashboard": (DashboardUI, lambda ui: DashboardController(ui, s)),
-            "usuarios": (UsuariosUI, lambda ui: UsuariosController(ui, s)),
-            "assinaturas": (AssinaturasUI, lambda ui: AssinaturasController(ui, s)),
-            "planos": (PlanosUI, lambda ui: PlanosController(ui, s, rt)),
-            "modulos": (ModulosUI, lambda ui: ModulosController(ui, s, rt)),
-            "logs": (LogsUI, lambda ui: LogsController(ui, s)),
+            "dashboard": (DashboardUI, lambda ui: DashboardController(ui, svc)),
+            "usuarios": (UsuariosUI, lambda ui: UsuariosController(ui, svc)),
+            "assinaturas": (AssinaturasUI, lambda ui: AssinaturasController(ui, svc)),
+            "planos": (PlanosUI, lambda ui: PlanosController(ui, svc, rt)),
+            "modulos": (ModulosUI, lambda ui: ModulosController(ui, svc, rt)),
+            "logs": (LogsUI, lambda ui: LogsController(ui, svc)),
         }
 
         self._controllers = {}

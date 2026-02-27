@@ -25,36 +25,37 @@ class PlanosWorker(QObject):
     toggle_pronto = pyqtSignal()
     delete_pronto = pyqtSignal(bool)
 
-    def salvar(self, nome, descricao, modulos):
-        ok, msg = criar_plano(nome, descricao, modulos)
+    def salvar(self, nome, desc, modulos):
+        ok, msg = criar_plano(nome, desc, modulos)
         self.salvar_pronto.emit(ok, msg)
 
-    def editar(self, plano_id, nome, descricao):
-        ok, _ = editar_plano(plano_id, nome, descricao)
+    def editar(self, pid, nome, desc):
+        ok, _ = editar_plano(pid, nome, desc)
         self.editar_pronto.emit(ok)
 
-    def toggle(self, plano_id, ativo):
-        ativar_plano(plano_id, not ativo)
+    def toggle(self, pid, ativo):
+        ativar_plano(pid, not ativo)
         self.toggle_pronto.emit()
 
-    def atualizar_modulos(self, plano_id, checks, modulos_atuais):
+    def atualizar_modulos(self, pid, checks, atuais):
         for mid, checked in checks.items():
-            if checked and mid not in modulos_atuais:
-                adicionar_modulo_plano(plano_id, mid)
-            elif not checked and mid in modulos_atuais:
-                remover_modulo_plano(plano_id, mid)
+            if checked and mid not in atuais:
+                adicionar_modulo_plano(pid, mid)
+            elif not checked and mid in atuais:
+                remover_modulo_plano(pid, mid)
         self.modulos_pronto.emit()
 
-    def excluir(self, plano_id):
-        ok = excluir_plano(plano_id)
+    def excluir(self, pid):
+        ok = excluir_plano(pid)
         self.delete_pronto.emit(ok)
 
 
 class PlanosController:
 
-    def __init__(self, ui, store, realtime=None):
+    def __init__(self, ui, svc, realtime=None):
         self.ui = ui
-        self._store = store
+        self._svc = svc
+        self._modulos = []
 
         self.thread = QThread()
         self.worker = PlanosWorker()
@@ -62,35 +63,37 @@ class PlanosController:
         self.worker.salvar_pronto.connect(self._finalizar_salvar)
         self.worker.editar_pronto.connect(self._finalizar_editar)
         self.worker.modulos_pronto.connect(self._finalizar_modulos)
-        self.worker.toggle_pronto.connect(self._renderizar)
+        self.worker.toggle_pronto.connect(self._carregar)
         self.worker.delete_pronto.connect(self._finalizar_exclusao)
         self.thread.start()
 
-        # Store notifica quando planos ou modulos mudam
-        store.planos_atualizados.connect(self._renderizar)
-        store.modulos_atualizados.connect(self._renderizar)
-        store.carregamento_completo.connect(self._renderizar)
+        svc.planos_mudou.connect(self._carregar)
 
-        self._conectar_eventos()
-        if store.planos:
-            self._renderizar()
-
-    def _conectar_eventos(self):
-        self.ui.btn_refresh.clicked.connect(lambda: self._store.carregar_tudo())
+        self.ui.btn_refresh.clicked.connect(self._carregar)
         self.ui.btn_novo.clicked.connect(self._dialog_novo_plano)
+        self._carregar()
 
-    def _renderizar(self):
+    def _carregar(self):
+        from utils.supabase_admin import listar_planos, listar_modulos
+
+        self._svc.fetch(
+            lambda: {"planos": listar_planos(), "modulos": listar_modulos()},
+            self._renderizar,
+        )
+
+    def _renderizar(self, dados):
+        if not dados:
+            return
+        self._modulos = dados.get("modulos", [])
         tabela = self.ui.tabela
         tabela.setRowCount(0)
-        modulos_disp = self._store.modulos
-
-        for p in self._store.planos:
+        for p in dados.get("planos", []):
             row = tabela.rowCount()
             tabela.insertRow(row)
             ativo = p.get("ativo", True)
             plano_id = p.get("id", "")
             mids = [m["modulo_id"] for m in p.get("planos_modulos", [])]
-            nomes = [m["nome"] for m in modulos_disp if m["id"] in mids]
+            nomes = [m["nome"] for m in self._modulos if m["id"] in mids]
             mod_txt = ", ".join(nomes) if nomes else "Nenhum"
 
             status = QTableWidgetItem("✅ Ativo" if ativo else "❌ Inativo")
@@ -172,7 +175,7 @@ class PlanosController:
         lbl_mod.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
         dialog._layout_corpo.insertWidget(4, lbl_mod)
         checks = {}
-        for i, m in enumerate(self._store.modulos):
+        for i, m in enumerate(self._modulos):
             cb = QCheckBox(m["nome"])
             cb.setStyleSheet("color: white; font-size: 12px;")
             dialog._layout_corpo.insertWidget(5 + i, cb)
@@ -184,7 +187,7 @@ class PlanosController:
         def _salvar():
             nome = inp_nome.text().strip()
             if not nome:
-                lbl_aviso.setText("⚠️  Informe o nome do plano.")
+                lbl_aviso.setText("⚠️  Informe o nome.")
                 return
             self._dialog_ref = dialog
             self._lbl_ref = lbl_aviso
@@ -203,7 +206,7 @@ class PlanosController:
         else:
             self._lbl_ref.setText(f"⚠️  {msg}")
 
-    def _dialog_editar(self, plano_id, nome, descricao):
+    def _dialog_editar(self, pid, nome, descricao):
         from telas.dialogs import DialogBase
 
         dialog = DialogBase("✏️  Editar Plano", parent=self.ui)
@@ -223,7 +226,7 @@ class PlanosController:
 
         def _salvar():
             self._dialog_ref = dialog
-            self.worker.editar(plano_id, inp_nome.text(), inp_desc.text())
+            self.worker.editar(pid, inp_nome.text(), inp_desc.text())
 
         dialog._btn_confirmar.clicked.connect(_salvar)
         dialog.exec()
@@ -232,7 +235,7 @@ class PlanosController:
         if ok:
             self._dialog_ref.accept()
 
-    def _dialog_modulos(self, plano_id, modulos_atuais):
+    def _dialog_modulos(self, pid, modulos_atuais):
         from telas.dialogs import DialogBase
 
         dialog = DialogBase("🧩  Módulos do Plano", parent=self.ui)
@@ -240,7 +243,7 @@ class PlanosController:
         lbl.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
         dialog._layout_corpo.insertWidget(0, lbl)
         checks = {}
-        for i, m in enumerate(self._store.modulos):
+        for i, m in enumerate(self._modulos):
             cb = QCheckBox(m["nome"])
             cb.setChecked(m["id"] in modulos_atuais)
             cb.setStyleSheet("color: white; font-size: 12px;")
@@ -250,9 +253,7 @@ class PlanosController:
         def _salvar():
             self._dialog_ref = dialog
             self.worker.atualizar_modulos(
-                plano_id,
-                {mid: cb.isChecked() for mid, cb in checks.items()},
-                modulos_atuais,
+                pid, {mid: cb.isChecked() for mid, cb in checks.items()}, modulos_atuais
             )
 
         dialog._btn_confirmar.clicked.connect(_salvar)
@@ -261,7 +262,7 @@ class PlanosController:
     def _finalizar_modulos(self):
         self._dialog_ref.accept()
 
-    def _confirmar_exclusao(self, plano_id):
+    def _confirmar_exclusao(self, pid):
         from telas.dialogs import DialogBase
 
         dialog = DialogBase("🗑️  Excluir Plano", parent=self.ui)
@@ -275,7 +276,7 @@ class PlanosController:
 
         def _confirmar():
             self._dialog_ref = dialog
-            self.worker.excluir(plano_id)
+            self.worker.excluir(pid)
 
         dialog._btn_confirmar.clicked.connect(_confirmar)
         dialog.exec()

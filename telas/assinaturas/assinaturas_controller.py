@@ -1,4 +1,4 @@
-import threading
+import os, threading
 from datetime import datetime, timezone
 from PyQt6.QtWidgets import (
     QTableWidgetItem,
@@ -9,9 +9,9 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QComboBox,
 )
-from PyQt6.QtCore import Qt, QObject, pyqtSignal
-import os, threading
-from utils.supabase_admin import renovar_assinatura
+from PyQt6.QtCore import Qt, QObject, pyqtSignal, QTimer
+
+BASICO_ID = os.getenv("PLANO_BASICO_ID", "11111111-1111-1111-1111-111111111111")
 
 
 class AssWorker(QObject):
@@ -35,8 +35,6 @@ class AssWorker(QObject):
 
 
 class _RpcWorker(QObject):
-    """Executa RPC em thread e emite sinais de volta na thread principal."""
-
     sucesso = pyqtSignal()
     erro = pyqtSignal(str)
 
@@ -63,66 +61,79 @@ class _RpcWorker(QObject):
             self.erro.emit(str(e))
 
 
-def _chamar_rpc(nome: str, params: dict, callback_ok, callback_err):
-    """Chama uma RPC do Supabase em thread separada, callbacks na thread principal."""
+def _chamar_rpc(nome, params, callback_ok, callback_err):
     w = _RpcWorker(nome, params)
     w.sucesso.connect(callback_ok)
     w.erro.connect(callback_err)
     w.executar()
-    return w  # mantém referência viva
+    return w
 
 
 class AssinaturasController:
 
-    def __init__(self, ui, store):
+    def __init__(self, ui, svc):
         self.ui = ui
-        self._store = store
+        self._svc = svc
         self._workers = []
+        self._planos = []
 
-        # Debounce de 300ms — agrupa eventos rápidos (UPDATE + INSERT)
-        # evitando o pisca de "sem assinatura" entre os dois eventos
-        from PyQt6.QtCore import QTimer
+        # Debounce 300ms — agrupa UPDATE + INSERT do mesmo evento
+        self._timer = QTimer()
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(300)
+        self._timer.timeout.connect(self._carregar)
 
-        self._timer_render = QTimer()
-        self._timer_render.setSingleShot(True)
-        self._timer_render.setInterval(300)
-        self._timer_render.timeout.connect(self._renderizar)
+        svc.assinaturas_mudou.connect(self._timer.start)
 
-        store.assinaturas_atualizadas.connect(self._timer_render.start)
-        store.carregamento_completo.connect(self._renderizar)
-
-        self._conectar_eventos()
-        if store.assinaturas:
-            self._renderizar()
-
-    def _conectar_eventos(self):
-        self.ui.btn_refresh.clicked.connect(lambda: self._store.carregar_tudo())
+        self.ui.btn_refresh.clicked.connect(self._carregar)
         self.ui.input_busca.textChanged.connect(self._filtrar)
+        self._todos = []
+        self._carregar()
 
-    def _filtrar(self, texto: str):
+    def _carregar(self):
+        from utils.supabase_admin import (
+            listar_assinaturas,
+            listar_usuarios,
+            listar_planos,
+        )
+
+        self._svc.fetch(
+            lambda: {
+                "assinaturas": listar_assinaturas(),
+                "usuarios": listar_usuarios(),
+                "planos": listar_planos(),
+            },
+            self._renderizar,
+        )
+
+    def _filtrar(self, texto):
         if not texto:
-            self._renderizar()
+            self._preencher(self._todos[0], self._todos[1])
             return
         ass_f = [
             a
-            for a in self._store.assinaturas
+            for a in self._todos[0]
             if texto.lower() in (a.get("username") or "").lower()
         ]
         sem_f = [
             u
-            for u in self._sem_assinatura()
+            for u in self._todos[1]
             if texto.lower() in (u.get("username") or "").lower()
         ]
         self._renderizar_dados(ass_f, sem_f)
 
-    def _sem_assinatura(self):
-        ids = {a.get("user_id") for a in self._store.assinaturas}
-        return [u for u in self._store.usuarios if u["id"] not in ids]
+    def _renderizar(self, dados):
+        if not dados:
+            return
+        assinaturas = dados.get("assinaturas", [])
+        usuarios = dados.get("usuarios", [])
+        self._planos = [p for p in dados.get("planos", []) if p.get("id") != BASICO_ID]
+        ids_com_ass = {a.get("user_id") for a in assinaturas}
+        sem_assinatura = [u for u in usuarios if u["id"] not in ids_com_ass]
+        self._todos = (assinaturas, sem_assinatura)
+        self._preencher(assinaturas, sem_assinatura)
 
-    def _renderizar(self):
-        self._renderizar_dados(self._store.assinaturas, self._sem_assinatura())
-
-    def _renderizar_dados(self, assinaturas, sem_assinatura):
+    def _preencher(self, assinaturas, sem_assinatura):
         tabela = self.ui.tabela
         tabela.setRowCount(0)
         for a in assinaturas:
@@ -141,14 +152,12 @@ class AssinaturasController:
         user_id = a.get("user_id", "")
         criado = expira = "—"
         dias = 0
-
         if a.get("criado_em"):
             try:
                 dt = datetime.fromisoformat(a["criado_em"].replace("Z", "+00:00"))
                 criado = dt.strftime("%d/%m/%Y")
             except Exception:
                 pass
-
         if a.get("expira_em"):
             try:
                 dt = datetime.fromisoformat(a["expira_em"].replace("Z", "+00:00"))
@@ -168,7 +177,7 @@ class AssinaturasController:
             dias_item = QTableWidgetItem("∞")
             dias_item.setForeground(Qt.GlobalColor.cyan)
         else:
-            dias_item = QTableWidgetItem(f"{max(0, dias)} dias")
+            dias_item = QTableWidgetItem(f"{max(0,dias)} dias")
             dias_item.setForeground(
                 Qt.GlobalColor.red
                 if dias <= 2
@@ -194,10 +203,10 @@ class AssinaturasController:
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setStyleSheet(
                 f"""QPushButton {{
-                    background-color: {cor}; color: white;
-                    border-radius: 5px; font-size: 11px;
-                    border: none; padding: 0 8px;
-                }}"""
+                background-color: {cor}; color: white;
+                border-radius: 5px; font-size: 11px;
+                border: none; padding: 0 8px;
+            }}"""
             )
             return b
 
@@ -234,9 +243,8 @@ class AssinaturasController:
         btn.setFixedHeight(26)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setStyleSheet(
-            "QPushButton { background-color: #7c3aed; color: white; "
-            "border-radius: 5px; font-size: 11px; border: none; padding: 0 8px; }"
-            "QPushButton:hover { background-color: #6d28d9; }"
+            """QPushButton { background-color: #7c3aed; color: white;
+            border-radius: 5px; font-size: 11px; border: none; padding: 0 8px; }"""
         )
         btn.clicked.connect(
             lambda _, uid=user_id, un=username: self._dialog_atribuir(uid, un)
@@ -248,43 +256,34 @@ class AssinaturasController:
 
     def _estilo_combo(self):
         return (
-            "QComboBox { background-color: rgba(255,255,255,0.05); border: 1px solid #2a3f7a; "
-            "border-radius: 8px; color: white; padding: 0 12px; font-size: 12px; }"
+            "QComboBox { background-color: rgba(255,255,255,0.05); "
+            "border: 1px solid #2a3f7a; border-radius: 8px; "
+            "color: white; padding: 0 12px; font-size: 12px; }"
             "QComboBox::drop-down { border: none; }"
-            "QComboBox QAbstractItemView { background-color: #1a2854; color: white; border: 1px solid #FFD700; }"
+            "QComboBox QAbstractItemView { background-color: #1a2854; "
+            "color: white; border: 1px solid #FFD700; }"
         )
 
-    def _dialog_atribuir(self, user_id: str, username: str):
-        import os
+    def _dialog_atribuir(self, user_id, username):
         from telas.dialogs import DialogBase
 
-        BASICO_ID = os.getenv("PLANO_BASICO_ID", "11111111-1111-1111-1111-111111111111")
-
         dialog = DialogBase("🎯  Atribuir Plano", parent=self.ui)
-
         lbl_info = QLabel(f"Usuário: <b style='color:#FFD700'>{username}</b>")
         lbl_info.setStyleSheet("color: #cccccc; font-size: 12px;")
-
         lbl_plano = QLabel("Selecione o plano:")
         lbl_plano.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
-
         combo = QComboBox()
         combo.setFixedHeight(36)
         combo.setStyleSheet(self._estilo_combo())
-        for p in self._store.planos:
-            if p["id"] != BASICO_ID:
-                combo.addItem(p["nome"], p["id"])
-
+        for p in self._planos:
+            combo.addItem(p["nome"], p["id"])
         lbl_dias = QLabel("Dias de acesso (0 = sem expiração):")
         lbl_dias.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
-
         inp_dias = QLineEdit("30")
         inp_dias.setFixedHeight(36)
         inp_dias.setStyleSheet(dialog._estilo_input())
-
         lbl_aviso = QLabel("")
         lbl_aviso.setStyleSheet("color: #ff5c5c; font-size: 11px;")
-
         dialog._layout_corpo.insertWidget(0, lbl_info)
         dialog._layout_corpo.insertWidget(1, lbl_plano)
         dialog._layout_corpo.insertWidget(2, combo)
@@ -321,8 +320,62 @@ class AssinaturasController:
         dialog._btn_confirmar.clicked.connect(_salvar)
         dialog.exec()
 
-    def _dialog_renovar(self, user_id: str):
+    def _dialog_mudar_plano(self, user_id):
         from telas.dialogs import DialogBase
+
+        dialog = DialogBase("🎯  Mudar Plano", parent=self.ui)
+        lbl_plano = QLabel("Selecione o novo plano:")
+        lbl_plano.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
+        combo = QComboBox()
+        combo.setFixedHeight(36)
+        combo.setStyleSheet(self._estilo_combo())
+        for p in self._planos:
+            combo.addItem(p["nome"], p["id"])
+        lbl_dias = QLabel("Dias de acesso (0 = sem expiração):")
+        lbl_dias.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
+        inp_dias = QLineEdit("30")
+        inp_dias.setFixedHeight(36)
+        inp_dias.setStyleSheet(dialog._estilo_input())
+        lbl_aviso = QLabel("")
+        lbl_aviso.setStyleSheet("color: #ff5c5c; font-size: 11px;")
+        dialog._layout_corpo.insertWidget(0, lbl_plano)
+        dialog._layout_corpo.insertWidget(1, combo)
+        dialog._layout_corpo.insertWidget(2, lbl_dias)
+        dialog._layout_corpo.insertWidget(3, inp_dias)
+        dialog._layout_corpo.insertWidget(4, lbl_aviso)
+
+        def _salvar():
+            plano_id = combo.currentData()
+            if not plano_id:
+                lbl_aviso.setText("⚠️  Nenhum plano disponível.")
+                return
+            try:
+                dias = int(inp_dias.text().strip())
+                if dias < 0:
+                    raise ValueError
+            except ValueError:
+                lbl_aviso.setText("⚠️  Dias inválido.")
+                return
+            dialog._btn_confirmar.setEnabled(False)
+            dialog._btn_confirmar.setText("Salvando...")
+            w = _chamar_rpc(
+                "atribuir_plano",
+                {"p_user_id": user_id, "p_plano_id": plano_id, "p_dias": dias},
+                lambda: dialog.accept(),
+                lambda msg: (
+                    lbl_aviso.setText(f"⚠️  {msg}"),
+                    dialog._btn_confirmar.setEnabled(True),
+                    dialog._btn_confirmar.setText("✓  Confirmar"),
+                ),
+            )
+            self._workers.append(w)
+
+        dialog._btn_confirmar.clicked.connect(_salvar)
+        dialog.exec()
+
+    def _dialog_renovar(self, user_id):
+        from telas.dialogs import DialogBase
+        from utils.supabase_admin import renovar_assinatura
 
         dialog = DialogBase("🔄  Renovar Assinatura", parent=self.ui)
         lbl = QLabel("Quantos dias deseja adicionar?")
@@ -361,95 +414,20 @@ class AssinaturasController:
         dialog._btn_confirmar.clicked.connect(_salvar)
         dialog.exec()
 
-    def _dialog_mudar_plano(self, user_id: str):
-        import os
-        from telas.dialogs import DialogBase
-        from utils.supabase_admin import criar_assinatura
+    def _revogar_para_basico(self, user_id, username):
+        from telas.dialogs import DialogConfirmacao
 
-        BASICO_ID = os.getenv("PLANO_BASICO_ID", "11111111-1111-1111-1111-111111111111")
-
-        dialog = DialogBase("🎯  Mudar Plano", parent=self.ui)
-
-        lbl_plano = QLabel("Selecione o novo plano:")
-        lbl_plano.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
-
-        combo = QComboBox()
-        combo.setFixedHeight(36)
-        combo.setStyleSheet(self._estilo_combo())
-        for p in self._store.planos:
-            if p["id"] != BASICO_ID:
-                combo.addItem(p["nome"], p["id"])
-
-        lbl_dias = QLabel("Dias de acesso (0 = sem expiração):")
-        lbl_dias.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
-
-        inp_dias = QLineEdit("30")
-        inp_dias.setFixedHeight(36)
-        inp_dias.setStyleSheet(dialog._estilo_input())
-
-        lbl_aviso = QLabel("")
-        lbl_aviso.setStyleSheet("color: #ff5c5c; font-size: 11px;")
-
-        dialog._layout_corpo.insertWidget(0, lbl_plano)
-        dialog._layout_corpo.insertWidget(1, combo)
-        dialog._layout_corpo.insertWidget(2, lbl_dias)
-        dialog._layout_corpo.insertWidget(3, inp_dias)
-        dialog._layout_corpo.insertWidget(4, lbl_aviso)
-
-        def _salvar():
-            plano_id = combo.currentData()
-            if not plano_id:
-                lbl_aviso.setText("⚠️  Nenhum plano disponível.")
-                return
-            try:
-                dias = int(inp_dias.text().strip())
-                if dias < 0:
-                    raise ValueError
-            except ValueError:
-                lbl_aviso.setText("⚠️  Dias inválido.")
-                return
-            dialog._btn_confirmar.setEnabled(False)
-            dialog._btn_confirmar.setText("Salvando...")
+        msg = f"Revogar plano de '{username}'? O usuário receberá o plano Básico sem expiração."
+        if DialogConfirmacao(msg, parent=self.ui).exec():
             w = _chamar_rpc(
-                "atribuir_plano",
-                {"p_user_id": user_id, "p_plano_id": plano_id, "p_dias": dias},
-                lambda: dialog.accept(),
-                lambda msg: (
-                    lbl_aviso.setText(f"⚠️  {msg}"),
-                    dialog._btn_confirmar.setEnabled(True),
-                    dialog._btn_confirmar.setText("✓  Confirmar"),
-                ),
+                "revogar_para_basico",
+                {"p_user_id": user_id},
+                lambda: None,
+                lambda e: print(f"[Revogar] Erro: {e}"),
             )
             self._workers.append(w)
 
-        dialog._btn_confirmar.clicked.connect(_salvar)
-        dialog.exec()
-
-    def _revogar_para_basico(self, user_id: str, username: str):
-        from telas.dialogs import DialogConfirmacao
-
-        if DialogConfirmacao(
-            f"Revogar plano de '{username}'? O usuário receberá o plano Básico sem expiração.",
-            parent=self.ui,
-        ).exec():
-            import threading, os
-            from supabase import create_client
-            from dotenv import load_dotenv
-
-            load_dotenv()
-
-            def _run():
-                try:
-                    c = create_client(
-                        os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY")
-                    )
-                    c.rpc("revogar_para_basico", {"p_user_id": user_id}).execute()
-                except Exception as e:
-                    print(f"[Revogar] Erro: {e}")
-
-            threading.Thread(target=_run, daemon=True).start()
-
-    def _item(self, texto: str) -> QTableWidgetItem:
+    def _item(self, texto):
         item = QTableWidgetItem(str(texto))
         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         return item
