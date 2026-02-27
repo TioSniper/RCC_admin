@@ -1,9 +1,9 @@
 import os
+import time
 import threading
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from supabase import create_client, Client
-from utils.logs_manager import _logs
 
 load_dotenv()
 
@@ -14,6 +14,27 @@ BASICO_ID = os.getenv("PLANO_BASICO_ID", "11111111-1111-1111-1111-111111111111")
 
 def _cliente() -> Client:
     return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+
+# ═══════════════════════════════════════════════════════════════
+# LOGS — arquivo JSON local via logs_manager
+# ═══════════════════════════════════════════════════════════════
+
+try:
+    from utils.logs_manager import _logs
+except ImportError:
+    # fallback: objeto mudo para não quebrar imports
+    class _LogsMudo:
+        def registrar(self, *a, **kw):
+            pass
+
+        def forcar_salvar(self):
+            pass
+
+        def listar(self, limite=200):
+            return []
+
+    _logs = _LogsMudo()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -230,12 +251,7 @@ def criar_usuario(username: str, senha: str) -> tuple[bool, str]:
         _cliente().table("perfis").update({"username": username.lower().strip()}).eq(
             "id", user_id
         ).execute()
-        _logs.registrar(
-            "criar_usuario",
-            username=username,
-            user_id=user_id,
-            detalhes={"username": username},
-        )
+        _logs.registrar("criar_usuario", detalhes={"username": username})
         return True, user_id
     except Exception as e:
         msg = str(e)
@@ -244,10 +260,21 @@ def criar_usuario(username: str, senha: str) -> tuple[bool, str]:
         return False, f"Erro: {msg}"
 
 
+def editar_username(user_id: str, novo_username: str) -> tuple[bool, str]:
+    try:
+        _cliente().table("perfis").update(
+            {"username": novo_username.lower().strip()}
+        ).eq("id", user_id).execute()
+        _logs.registrar("editar_username", detalhes={"username": novo_username})
+        return True, "Username atualizado."
+    except Exception as e:
+        return False, f"Erro: {e}"
+
+
 def ativar_usuario(user_id: str) -> tuple[bool, str]:
     try:
         _cliente().table("perfis").update({"ativo": True}).eq("id", user_id).execute()
-        _logs.registrar("ativar_usuario", user_id=user_id)
+        _logs.registrar("ativar_usuario", detalhes={"user_id": user_id})
         return True, "Usuário ativado."
     except Exception as e:
         return False, f"Erro: {e}"
@@ -256,7 +283,7 @@ def ativar_usuario(user_id: str) -> tuple[bool, str]:
 def desativar_usuario(user_id: str) -> tuple[bool, str]:
     try:
         _cliente().table("perfis").update({"ativo": False}).eq("id", user_id).execute()
-        _logs.registrar("desativar_usuario", user_id=user_id)
+        _logs.registrar("desativar_usuario", detalhes={"user_id": user_id})
         return True, "Usuário desativado."
     except Exception as e:
         return False, f"Erro: {e}"
@@ -265,7 +292,7 @@ def desativar_usuario(user_id: str) -> tuple[bool, str]:
 def resetar_senha(user_id: str, nova_senha: str) -> tuple[bool, str]:
     try:
         _cliente().auth.admin.update_user_by_id(user_id, {"password": nova_senha})
-        _logs.registrar("resetar_senha", user_id=user_id)
+        _logs.registrar("resetar_senha", detalhes={"user_id": user_id})
         return True, "Senha resetada."
     except Exception as e:
         return False, f"Erro: {e}"
@@ -274,7 +301,7 @@ def resetar_senha(user_id: str, nova_senha: str) -> tuple[bool, str]:
 def deletar_usuario(user_id: str) -> tuple[bool, str]:
     try:
         _cliente().auth.admin.delete_user(user_id)
-        _logs.registrar("deletar_usuario", user_id=user_id)
+        _logs.registrar("deletar_usuario", detalhes={"user_id": user_id})
         return True, "Usuário deletado."
     except Exception as e:
         return False, f"Erro: {e}"
@@ -320,17 +347,18 @@ def renovar_assinatura(user_id: str, dias: int) -> tuple[bool, str]:
         _cliente().rpc(
             "renovar_assinatura_admin", {"p_user_id": user_id, "p_dias": dias}
         ).execute()
-        _logs.registrar("renovar_assinatura", user_id=user_id, detalhes={"dias": dias})
+        _logs.registrar(
+            "renovar_assinatura", detalhes={"user_id": user_id, "dias": dias}
+        )
         return True, f"Renovada por mais {dias} dias."
     except Exception as e:
         return False, f"Erro: {e}"
 
 
 def revogar_assinatura(user_id: str) -> tuple[bool, str]:
-    """Revoga plano atual chamando RPC que aplica básico automaticamente."""
     try:
         _cliente().rpc("revogar_para_basico", {"p_user_id": user_id}).execute()
-        _logs.registrar("revogar_assinatura", user_id=user_id)
+        _logs.registrar("revogar_assinatura", detalhes={"user_id": user_id})
         return True, "Assinatura revogada."
     except Exception as e:
         return False, f"Erro: {e}"
@@ -382,12 +410,7 @@ def aprovar_solicitacao(sol_id: str, username: str, dias: int) -> tuple[bool, st
         _cliente().table("solicitacoes").update({"status": "aprovado"}).eq(
             "id", sol_id
         ).execute()
-        _logs.registrar(
-            "aprovar_solicitacao",
-            username=username,
-            user_id=user_id,
-            detalhes={"username": username},
-        )
+        _logs.registrar("aprovar_solicitacao", detalhes={"username": username})
         return True, f"Usuário '{username}' aprovado."
     except Exception as e:
         return False, f"Erro: {e}"
@@ -419,7 +442,6 @@ def resumo_geral() -> dict:
         ativos = len(
             _cliente().table("perfis").select("id").eq("ativo", True).execute().data
         )
-
         ass_ativas = len(
             _cliente()
             .table("assinaturas")
@@ -440,7 +462,6 @@ def resumo_geral() -> dict:
             .execute()
             .data
         )
-        # Expiradas: assinaturas pagas inativas com data de expiração no passado
         expiradas = len(
             _cliente()
             .table("assinaturas")
@@ -487,7 +508,7 @@ def listar_expirando(dias: int = 7) -> list:
 
 
 # ═══════════════════════════════════════════════════════════════
-# LOGS — lê do JSON local
+# LOGS
 # ═══════════════════════════════════════════════════════════════
 
 

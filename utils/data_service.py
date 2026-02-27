@@ -3,24 +3,16 @@ DataService — sinais para os controllers e fetch thread-safe.
 """
 
 import threading
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal, Qt
 
 
 class _FetchWorker(QObject):
-    """Executa uma função em thread e entrega o resultado via sinal Qt."""
-
     _pronto = pyqtSignal(object)
 
     def __init__(self, fn, callback):
         super().__init__()
         self._fn = fn
-        # Conecta com QueuedConnection — callback sempre roda na thread principal
-        self._pronto.connect(
-            callback,
-            type=__import__(
-                "PyQt6.QtCore", fromlist=["Qt"]
-            ).Qt.ConnectionType.QueuedConnection,
-        )
+        self._pronto.connect(callback, type=Qt.ConnectionType.QueuedConnection)
 
     def start(self):
         threading.Thread(target=self._run, daemon=True).start()
@@ -48,13 +40,37 @@ class DataService(QObject):
         self._workers = []
 
     def fetch(self, fn, callback):
-        """Executa fn() em thread separada, chama callback(resultado) na thread principal."""
         w = _FetchWorker(fn, callback)
         self._workers.append(w)
-        # Limpa workers antigos
         self._workers = self._workers[-50:]
         w.start()
         return w
+
+    # ── métodos de disparo com debug ──────────────────────────
+    def _emitir(self, sinal, nome):
+        print(f"[DataService] disparando {nome}")
+        sinal.emit()
+
+    def emitir_usuarios(self):
+        self._emitir(self.usuarios_mudou, "usuarios_mudou")
+
+    def emitir_assinaturas(self):
+        self._emitir(self.assinaturas_mudou, "assinaturas_mudou")
+
+    def emitir_planos(self):
+        self._emitir(self.planos_mudou, "planos_mudou")
+
+    def emitir_modulos(self):
+        self._emitir(self.modulos_mudou, "modulos_mudou")
+
+    def emitir_logs(self):
+        self._emitir(self.logs_mudou, "logs_mudou")
+
+    def emitir_solicitacoes(self):
+        self._emitir(self.solicitacoes_mudou, "solicitacoes_mudou")
+
+    def emitir_sessoes(self):
+        self._emitir(self.sessoes_mudou, "sessoes_mudou")
 
 
 _service: DataService | None = None

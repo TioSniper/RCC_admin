@@ -29,45 +29,47 @@ class PrincipalController:
         self._conectar_eventos()
         self._ir_para("dashboard")
 
-    def _make_timer(self, sinal_destino):
-        """Cria um QTimer de debounce 300ms que emite sinal_destino ao disparar."""
-        t = QTimer()
-        t.setSingleShot(True)
-        t.setInterval(300)
-        t.timeout.connect(sinal_destino.emit)
-        self._timers.append(t)
-        return t
-
     def _conectar_realtime(self):
         if not self._realtime:
-            print(
-                "[Principal] Realtime não disponível — atualizações automáticas desativadas"
-            )
             return
 
         rt = self._realtime
         svc = self._svc
 
-        # Cada sinal do Realtime inicia um timer de debounce
-        # Quando o timer dispara, emite o sinal do DataService (sem args)
-        # Os controllers ouvem os sinais do DataService
+        # Mapa: sinal_realtime → método de emissão do DataService
+        # Usa métodos nomeados em vez de lambda para evitar problemas com args
         mapa = [
-            (rt.usuarios_mudou, svc.usuarios_mudou),
-            (rt.assinaturas_mudou, svc.assinaturas_mudou),
-            (rt.planos_mudou, svc.planos_mudou),
-            (rt.planos_modulos_mudou, svc.planos_mudou),
-            (rt.modulos_mudou, svc.modulos_mudou),
-            (rt.logs_mudou, svc.logs_mudou),
-            (rt.solicitacoes_mudou, svc.solicitacoes_mudou),
-            (rt.sessoes_mudou, svc.sessoes_mudou),
+            (rt.usuarios_mudou, svc.emitir_usuarios),
+            (rt.assinaturas_mudou, svc.emitir_assinaturas),
+            # assinatura mudou → recarrega aba usuários também (plano exibido lá)
+            (rt.assinaturas_mudou, svc.emitir_usuarios),
+            (rt.planos_mudou, svc.emitir_planos),
+            (rt.planos_modulos_mudou, svc.emitir_planos),
+            (rt.modulos_mudou, svc.emitir_modulos),
+            (rt.logs_mudou, svc.emitir_logs),
+            (rt.solicitacoes_mudou, svc.emitir_solicitacoes),
+            (rt.sessoes_mudou, svc.emitir_sessoes),
         ]
 
-        for sinal_rt, sinal_svc in mapa:
-            t = self._make_timer(sinal_svc)
-            # lambda com default capture evita closure bug
-            sinal_rt.connect(lambda payload, _t=t: _t.start())
+        for sinal_rt, emitir_fn in mapa:
+            t = QTimer()
+            t.setSingleShot(True)
+            t.setInterval(300)
+            t.timeout.connect(emitir_fn)
+            # O sinal do Realtime emite dict — precisamos ignorar esse arg
+            # Usamos uma função intermediária que aceita qualquer arg
+            sinal_rt.connect(self._fazer_iniciador(t))
+            self._timers.append(t)
 
-        print(f"[Principal] Realtime conectado — {len(mapa)} sinais mapeados")
+        print(f"[Principal] Realtime conectado — 8 tabelas monitoradas")
+
+    @staticmethod
+    def _fazer_iniciador(timer: QTimer):
+        def _iniciar(*args, **kwargs):
+            print(f"[Principal] evento Realtime recebido → timer iniciado")
+            timer.start()
+
+        return _iniciar
 
     def _carregar_paginas(self):
         svc = self._svc
@@ -136,13 +138,17 @@ class PrincipalController:
             self.ui.btn_maximizar.setText("❐")
 
     def _fechar(self):
-        from utils.logs_manager import _logs
-
         try:
             if self._realtime:
-                print("[Realtime] Parando conexão...")
                 self._realtime.parar()
-            _logs.forcar_salvar()
+            try:
+                from utils.logs_manager import _logs
+
+                _logs.forcar_salvar()
+            except ImportError:
+                from utils.supabase_admin import _logs
+
+                _logs.forcar_salvar()
         except Exception as e:
-            print("Erro ao fechar recursos:", e)
+            print(f"Erro ao fechar: {e}")
         self.ui.close()
