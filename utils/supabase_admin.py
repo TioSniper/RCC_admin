@@ -203,9 +203,18 @@ def ativar_plano(plano_id: str, ativo: bool) -> tuple[bool, str]:
 
 def excluir_plano(plano_id: str) -> bool:
     try:
+        plano = (
+            _cliente()
+            .table("planos")
+            .select("nome")
+            .eq("id", plano_id)
+            .single()
+            .execute()
+        )
+        nome_plano = plano.data.get("nome", "?") if plano.data else "?"
         _cliente().table("planos_modulos").delete().eq("plano_id", plano_id).execute()
         _cliente().table("planos").delete().eq("id", plano_id).execute()
-        _logs.registrar("excluir_plano", detalhes={})
+        _logs.registrar("excluir_plano", detalhes={"nome": nome_plano})
         return True
     except Exception as e:
         print(f"Erro ao excluir plano: {e}")
@@ -339,8 +348,17 @@ def resetar_senha(user_id: str, nova_senha: str) -> tuple[bool, str]:
 
 def deletar_usuario(user_id: str) -> tuple[bool, str]:
     try:
+        perfil = (
+            _cliente()
+            .table("perfis")
+            .select("username")
+            .eq("id", user_id)
+            .single()
+            .execute()
+        )
+        username = perfil.data.get("username", user_id) if perfil.data else user_id
         _cliente().auth.admin.delete_user(user_id)
-        _logs.registrar("deletar_usuario", detalhes={"user_id": user_id})
+        _logs.registrar("deletar_usuario", detalhes={"username": username})
         return True, "Usuário deletado."
     except Exception as e:
         return False, f"Erro: {e}"
