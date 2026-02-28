@@ -77,18 +77,22 @@ class AssinaturasController:
         self._workers = []
         self._planos = []
 
-        # Debounce 300ms — agrupa UPDATE + INSERT do mesmo evento
         self._timer = QTimer()
         self._timer.setSingleShot(True)
         self._timer.setInterval(300)
         self._timer.timeout.connect(self._carregar)
 
-        svc.assinaturas_mudou.connect(self._timer.start)
+        # Correção: wrapper aceita qualquer argumento emitido pelo sinal
+        svc.assinaturas_mudou.connect(self._iniciar_timer)
 
         self.ui.btn_refresh.clicked.connect(self._carregar)
         self.ui.input_busca.textChanged.connect(self._filtrar)
         self._todos = []
         self._carregar()
+
+    def _iniciar_timer(self, *args, **kwargs):
+        """Wrapper que ignora argumentos do sinal e inicia o timer."""
+        self._timer.start()
 
     def _carregar(self):
         from utils.supabase_admin import (
@@ -177,7 +181,7 @@ class AssinaturasController:
             dias_item = QTableWidgetItem("∞")
             dias_item.setForeground(Qt.GlobalColor.cyan)
         else:
-            dias_item = QTableWidgetItem(f"{max(0,dias)} dias")
+            dias_item = QTableWidgetItem(f"{max(0, dias)} dias")
             dias_item.setForeground(
                 Qt.GlobalColor.red
                 if dias <= 2
