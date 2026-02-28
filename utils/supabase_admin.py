@@ -184,8 +184,18 @@ def remover_modulo_plano(plano_id: str, modulo_id: str) -> tuple[bool, str]:
 
 def ativar_plano(plano_id: str, ativo: bool) -> tuple[bool, str]:
     try:
+        plano = (
+            _cliente()
+            .table("planos")
+            .select("nome")
+            .eq("id", plano_id)
+            .single()
+            .execute()
+        )
+        nome_plano = plano.data.get("nome", "?") if plano.data else "?"
         _cliente().table("planos").update({"ativo": ativo}).eq("id", plano_id).execute()
-        _logs.registrar("ativar_plano" if ativo else "desativar_plano", detalhes={})
+        acao = "ativar_plano" if ativo else "desativar_plano"
+        _logs.registrar(acao, detalhes={"nome": nome_plano})
         return True, "Plano atualizado."
     except Exception as e:
         return False, f"Erro: {e}"
@@ -275,7 +285,16 @@ def ativar_usuario(user_id: str) -> tuple[bool, str]:
     try:
         _cliente().auth.admin.update_user_by_id(user_id, {"ban_duration": "none"})
         _cliente().table("perfis").update({"ativo": True}).eq("id", user_id).execute()
-        _logs.registrar("ativar_usuario", detalhes={"user_id": user_id})
+        perfil = (
+            _cliente()
+            .table("perfis")
+            .select("username")
+            .eq("id", user_id)
+            .single()
+            .execute()
+        )
+        username = perfil.data.get("username", user_id) if perfil.data else user_id
+        _logs.registrar("ativar_usuario", detalhes={"username": username})
         return True, "Usuário ativado."
     except Exception as e:
         return False, f"Erro: {e}"
@@ -287,7 +306,16 @@ def desativar_usuario(user_id: str) -> tuple[bool, str]:
         _cliente().auth.admin.update_user_by_id(user_id, {"ban_duration": "876000h"})
         # 2. Marca perfil como inativo — NÃO toca em assinaturas
         _cliente().table("perfis").update({"ativo": False}).eq("id", user_id).execute()
-        _logs.registrar("desativar_usuario", detalhes={"user_id": user_id})
+        perfil = (
+            _cliente()
+            .table("perfis")
+            .select("username")
+            .eq("id", user_id)
+            .single()
+            .execute()
+        )
+        username = perfil.data.get("username", user_id) if perfil.data else user_id
+        _logs.registrar("desativar_usuario", detalhes={"username": username})
         return True, "Usuário desativado."
     except Exception as e:
         print(f"[desativar_usuario] ERRO: {e}")
@@ -349,11 +377,52 @@ def listar_assinaturas() -> list:
 
 def renovar_assinatura(user_id: str, dias: int) -> tuple[bool, str]:
     try:
+        # Busca dados antes de renovar para registrar no log
+        perfil = (
+            _cliente()
+            .table("perfis")
+            .select("username")
+            .eq("id", user_id)
+            .single()
+            .execute()
+        )
+        username = perfil.data.get("username", user_id) if perfil.data else user_id
+        ass = (
+            _cliente()
+            .table("v_assinaturas")
+            .select("plano_nome,expira_em")
+            .eq("user_id", user_id)
+            .eq("ativo", True)
+            .limit(1)
+            .execute()
+        )
+        plano_nome = ass.data[0].get("plano_nome", "?") if ass.data else "?"
+        expira_antiga = ass.data[0].get("expira_em", "") if ass.data else ""
         _cliente().rpc(
             "renovar_assinatura_admin", {"p_user_id": user_id, "p_dias": dias}
         ).execute()
+        # Busca nova expiração após renovar
+        ass2 = (
+            _cliente()
+            .table("v_assinaturas")
+            .select("expira_em")
+            .eq("user_id", user_id)
+            .eq("ativo", True)
+            .limit(1)
+            .execute()
+        )
+        expira_nova = ass2.data[0].get("expira_em", "") if ass2.data else ""
         _logs.registrar(
-            "renovar_assinatura", detalhes={"user_id": user_id, "dias": dias}
+            "renovar_assinatura",
+            detalhes={
+                "username": username,
+                "plano": plano_nome,
+                "dias_adicionados": dias,
+                "expiracao_anterior": (
+                    expira_antiga[:10] if expira_antiga else "sem expiração"
+                ),
+                "nova_expiracao": expira_nova[:10] if expira_nova else "sem expiração",
+            },
         )
         return True, f"Renovada por mais {dias} dias."
     except Exception as e:
@@ -362,8 +431,30 @@ def renovar_assinatura(user_id: str, dias: int) -> tuple[bool, str]:
 
 def revogar_assinatura(user_id: str) -> tuple[bool, str]:
     try:
+        perfil = (
+            _cliente()
+            .table("perfis")
+            .select("username")
+            .eq("id", user_id)
+            .single()
+            .execute()
+        )
+        username = perfil.data.get("username", user_id) if perfil.data else user_id
+        ass = (
+            _cliente()
+            .table("v_assinaturas")
+            .select("plano_nome")
+            .eq("user_id", user_id)
+            .eq("ativo", True)
+            .limit(1)
+            .execute()
+        )
+        plano_anterior = ass.data[0].get("plano_nome", "?") if ass.data else "?"
         _cliente().rpc("revogar_para_basico", {"p_user_id": user_id}).execute()
-        _logs.registrar("revogar_assinatura", detalhes={"user_id": user_id})
+        _logs.registrar(
+            "revogar_assinatura",
+            detalhes={"username": username, "plano_anterior": plano_anterior},
+        )
         return True, "Assinatura revogada."
     except Exception as e:
         return False, f"Erro: {e}"

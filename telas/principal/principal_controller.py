@@ -67,7 +67,9 @@ class PrincipalController:
     def _fazer_iniciador(timer: QTimer):
         def _iniciar(*args, **kwargs):
             print(f"[Principal] evento Realtime recebido → timer iniciado")
-            timer.start()
+            from PyQt6.QtCore import QMetaObject, Qt
+
+            QMetaObject.invokeMethod(timer, "start", Qt.ConnectionType.QueuedConnection)
 
         return _iniciar
 

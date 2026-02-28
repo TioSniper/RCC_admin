@@ -84,6 +84,7 @@ class DashboardController:
         self.ui.btn_disparar_update.clicked.connect(self._dialog_disparar_update)
 
         self._carregar()
+        self._carregar_sessoes()
 
     def _carregar(self):
         from utils.supabase_admin import (

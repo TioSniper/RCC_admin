@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import QTableWidgetItem
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 
 
 class LogsController:
@@ -8,7 +8,28 @@ class LogsController:
         self.ui = ui
         self._svc = svc
 
-        svc.logs_mudou.connect(self._carregar)
+        # Debounce — corrige bug do QTimer com args do PyQt6
+        self._timer = QTimer()
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(300)
+        self._timer.timeout.connect(self._carregar)
+
+        def _iniciar(*args, **kwargs):
+            from PyQt6.QtCore import QMetaObject, Qt
+
+            QMetaObject.invokeMethod(
+                self._timer, "start", Qt.ConnectionType.QueuedConnection
+            )
+
+        svc.logs_mudou.connect(_iniciar)
+
+        # Atualiza também quando um novo log é gravado localmente
+        try:
+            from utils.logs_manager import _logs as _lm
+
+            _lm.on_novo_log(_iniciar)
+        except Exception:
+            pass
 
         self.ui.btn_refresh.clicked.connect(self._carregar)
         self.ui.input_busca.textChanged.connect(self._filtrar)
@@ -27,6 +48,7 @@ class LogsController:
                 for l in self._todos
                 if texto.lower() in (l.get("acao") or "").lower()
                 or texto.lower() in (l.get("username") or "").lower()
+                or texto.lower() in str(l.get("detalhes") or "").lower()
             ]
             if texto
             else self._todos
@@ -55,10 +77,30 @@ class LogsController:
                 criado = dt.strftime("%d/%m/%Y %H:%M")
             except Exception:
                 pass
+
+            # Extrai username dos detalhes se não estiver no campo direto
+            username = l.get("username") or ""
+            if not username:
+                detalhes = l.get("detalhes") or {}
+                if isinstance(detalhes, dict):
+                    username = detalhes.get("username", "—")
+
+            # Formata detalhes removendo o username para não duplicar
+            detalhes = l.get("detalhes") or {}
+            if isinstance(detalhes, dict):
+                det_exibir = {k: v for k, v in detalhes.items() if k != "username"}
+                det_str = (
+                    ", ".join(f"{k}: {v}" for k, v in det_exibir.items())
+                    if det_exibir
+                    else "—"
+                )
+            else:
+                det_str = str(detalhes) if detalhes else "—"
+
             tabela.setItem(row, 0, self._item(criado))
             tabela.setItem(row, 1, self._item(l.get("acao", "—")))
-            tabela.setItem(row, 2, self._item(l.get("username", "—")))
-            tabela.setItem(row, 3, self._item(str(l.get("detalhes", "") or "")))
+            tabela.setItem(row, 2, self._item(username))
+            tabela.setItem(row, 3, self._item(det_str))
             tabela.setRowHeight(row, 36)
 
     def _item(self, texto):

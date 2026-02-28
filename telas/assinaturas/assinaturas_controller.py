@@ -48,14 +48,9 @@ class _RpcWorker(QObject):
 
     def _run(self):
         try:
-            from supabase import create_client
-            from dotenv import load_dotenv
+            from utils.supabase_admin import _cliente
 
-            load_dotenv()
-            cli = create_client(
-                os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY")
-            )
-            cli.rpc(self._nome, self._params).execute()
+            _cliente().rpc(self._nome, self._params).execute()
             self.sucesso.emit()
         except Exception as e:
             self.erro.emit(str(e))
@@ -77,22 +72,26 @@ class AssinaturasController:
         self._workers = []
         self._planos = []
 
+        # Debounce — corrige bug do QTimer com args do PyQt6
         self._timer = QTimer()
         self._timer.setSingleShot(True)
         self._timer.setInterval(300)
         self._timer.timeout.connect(self._carregar)
 
-        # Correção: wrapper aceita qualquer argumento emitido pelo sinal
-        svc.assinaturas_mudou.connect(self._iniciar_timer)
+        def _iniciar(*args, **kwargs):
+            from PyQt6.QtCore import QMetaObject, Qt
+
+            QMetaObject.invokeMethod(
+                self._timer, "start", Qt.ConnectionType.QueuedConnection
+            )
+
+        svc.assinaturas_mudou.connect(_iniciar)
+        svc.usuarios_mudou.connect(_iniciar)
 
         self.ui.btn_refresh.clicked.connect(self._carregar)
         self.ui.input_busca.textChanged.connect(self._filtrar)
         self._todos = []
         self._carregar()
-
-    def _iniciar_timer(self, *args, **kwargs):
-        """Wrapper que ignora argumentos do sinal e inicia o timer."""
-        self._timer.start()
 
     def _carregar(self):
         from utils.supabase_admin import (
@@ -181,7 +180,7 @@ class AssinaturasController:
             dias_item = QTableWidgetItem("∞")
             dias_item.setForeground(Qt.GlobalColor.cyan)
         else:
-            dias_item = QTableWidgetItem(f"{max(0, dias)} dias")
+            dias_item = QTableWidgetItem(f"{max(0,dias)} dias")
             dias_item.setForeground(
                 Qt.GlobalColor.red
                 if dias <= 2
@@ -218,7 +217,9 @@ class AssinaturasController:
         btn_plano = _btn("Plano", "#2563eb")
         btn_basico = _btn("→ Básico", "#dc2626")
         btn_renovar.clicked.connect(lambda _, uid=user_id: self._dialog_renovar(uid))
-        btn_plano.clicked.connect(lambda _, uid=user_id: self._dialog_mudar_plano(uid))
+        btn_plano.clicked.connect(
+            lambda _, uid=user_id, u=username: self._dialog_mudar_plano(uid, u)
+        )
         btn_basico.clicked.connect(
             lambda _, uid=user_id, u=username: self._revogar_para_basico(uid, u)
         )
@@ -306,6 +307,7 @@ class AssinaturasController:
 
         def _salvar():
             plano_id = combo.currentData()
+            plano_nome = combo.currentText()
             if not plano_id:
                 lbl_aviso.setText("⚠️  Nenhum plano disponível.")
                 return
@@ -321,7 +323,12 @@ class AssinaturasController:
             w = _chamar_rpc(
                 "atribuir_plano",
                 {"p_user_id": user_id, "p_plano_id": plano_id, "p_dias": dias},
-                lambda: dialog.accept(),
+                lambda: (
+                    self._registrar_log(
+                        "atribuir_plano", username, {"plano": plano_nome, "dias": dias}
+                    ),
+                    dialog.accept(),
+                ),
                 lambda msg: (
                     lbl_aviso.setText(f"⚠️  {msg}"),
                     dialog._btn_confirmar.setEnabled(True),
@@ -333,15 +340,17 @@ class AssinaturasController:
         dialog._btn_confirmar.clicked.connect(_salvar)
         dialog.exec()
 
-    def _dialog_mudar_plano(self, user_id):
+    def _dialog_mudar_plano(self, user_id, username=""):
         from utils.supabase_admin import listar_planos
 
         self._svc.fetch(
             listar_planos,
-            lambda planos: self._abrir_dialog_mudar_plano(user_id, planos or []),
+            lambda planos: self._abrir_dialog_mudar_plano(
+                user_id, username, planos or []
+            ),
         )
 
-    def _abrir_dialog_mudar_plano(self, user_id, planos):
+    def _abrir_dialog_mudar_plano(self, user_id, username, planos):
         from telas.dialogs import DialogBase
 
         dialog = DialogBase("🎯  Mudar Plano", parent=self.ui)
@@ -368,6 +377,7 @@ class AssinaturasController:
 
         def _salvar():
             plano_id = combo.currentData()
+            plano_nome = combo.currentText()
             if not plano_id:
                 lbl_aviso.setText("⚠️  Nenhum plano disponível.")
                 return
@@ -383,7 +393,12 @@ class AssinaturasController:
             w = _chamar_rpc(
                 "atribuir_plano",
                 {"p_user_id": user_id, "p_plano_id": plano_id, "p_dias": dias},
-                lambda: dialog.accept(),
+                lambda: (
+                    self._registrar_log(
+                        "mudar_plano", username, {"plano": plano_nome, "dias": dias}
+                    ),
+                    dialog.accept(),
+                ),
                 lambda msg: (
                     lbl_aviso.setText(f"⚠️  {msg}"),
                     dialog._btn_confirmar.setEnabled(True),
@@ -439,15 +454,43 @@ class AssinaturasController:
     def _revogar_para_basico(self, user_id, username):
         from telas.dialogs import DialogConfirmacao
 
+        # Descobre plano atual antes de revogar
+        plano_anterior = "?"
+        try:
+            from utils.supabase_admin import _cliente
+
+            ass = (
+                _cliente()
+                .table("v_assinaturas")
+                .select("plano_nome")
+                .eq("user_id", user_id)
+                .eq("ativo", True)
+                .limit(1)
+                .execute()
+            )
+            if ass.data:
+                plano_anterior = ass.data[0].get("plano_nome", "?")
+        except Exception:
+            pass
         msg = f"Revogar plano de '{username}'? O usuário receberá o plano Básico sem expiração."
         if DialogConfirmacao(msg, parent=self.ui).exec():
             w = _chamar_rpc(
                 "revogar_para_basico",
                 {"p_user_id": user_id},
-                lambda: None,
+                lambda: self._registrar_log(
+                    "revogar_para_basico", username, {"plano_anterior": plano_anterior}
+                ),
                 lambda e: print(f"[Revogar] Erro: {e}"),
             )
             self._workers.append(w)
+
+    def _registrar_log(self, acao, username, detalhes):
+        try:
+            from utils.supabase_admin import _logs
+
+            _logs.registrar(acao, detalhes={"username": username, **detalhes})
+        except Exception as e:
+            print(f"[Log] Erro: {e}")
 
     def _item(self, texto):
         item = QTableWidgetItem(str(texto))
