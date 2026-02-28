@@ -219,6 +219,7 @@ def excluir_plano(plano_id: str) -> bool:
 
 def listar_usuarios() -> list:
     try:
+        # 2 queries em vez de N+1
         perfis = (
             _cliente()
             .table("perfis")
@@ -226,22 +227,27 @@ def listar_usuarios() -> list:
             .order("criado_em", desc=True)
             .execute()
         )
-        usuarios = []
+        if not perfis.data:
+            return []
+        # Busca todas as assinaturas ativas de uma vez
+        ids = [p["id"] for p in perfis.data]
+        ass_todas = (
+            _cliente()
+            .table("v_assinaturas")
+            .select("*")
+            .eq("ativo", True)
+            .in_("user_id", ids)
+            .execute()
+        )
+        # Indexa por user_id (pega a mais recente de cada usuário)
+        ass_map = {}
+        for a in ass_todas.data or []:
+            uid = a.get("user_id")
+            if uid not in ass_map:
+                ass_map[uid] = a
         for p in perfis.data:
-            # Busca assinatura ativa — inclui básico para exibir plano real na aba usuários
-            ass = (
-                _cliente()
-                .table("v_assinaturas")
-                .select("*")
-                .eq("user_id", p["id"])
-                .eq("ativo", True)
-                .order("criado_em", desc=True)
-                .limit(1)
-                .execute()
-            )
-            p["assinatura"] = ass.data[0] if ass.data else None
-            usuarios.append(p)
-        return usuarios
+            p["assinatura"] = ass_map.get(p["id"])
+        return perfis.data
     except Exception as e:
         print(f"Erro ao listar usuários: {e}")
         return []
@@ -535,48 +541,40 @@ def resumo_geral() -> dict:
         agora = datetime.now(timezone.utc)
         em_7_dias = (agora + timedelta(days=7)).isoformat()
         agora_iso = agora.isoformat()
-
-        total = len(_cliente().table("perfis").select("id").execute().data)
-        ativos = len(
-            _cliente().table("perfis").select("id").eq("ativo", True).execute().data
+        cli = _cliente()
+        # count="exact" retorna .count sem baixar os dados — muito mais rápido
+        r_total = cli.table("perfis").select("id", count="exact").execute()
+        r_ativos = (
+            cli.table("perfis").select("id", count="exact").eq("ativo", True).execute()
         )
-        ass_ativas = len(
-            _cliente()
-            .table("assinaturas")
-            .select("id")
+        r_ass = (
+            cli.table("assinaturas")
+            .select("id", count="exact")
             .eq("ativo", True)
             .neq("plano_id", BASICO_ID)
             .execute()
-            .data
         )
-        expirando = len(
-            _cliente()
-            .table("assinaturas")
-            .select("id")
+        r_expir = (
+            cli.table("assinaturas")
+            .select("id", count="exact")
             .eq("ativo", True)
-            .neq("plano_id", BASICO_ID)
             .lte("expira_em", em_7_dias)
             .gte("expira_em", agora_iso)
             .execute()
-            .data
         )
-        expiradas = len(
-            _cliente()
-            .table("assinaturas")
-            .select("id")
-            .eq("ativo", False)
-            .neq("plano_id", BASICO_ID)
-            .not_.is_("expira_em", "null")
+        r_expirada = (
+            cli.table("assinaturas")
+            .select("id", count="exact")
+            .eq("ativo", True)
             .lt("expira_em", agora_iso)
             .execute()
-            .data
         )
         return {
-            "total_usuarios": total,
-            "usuarios_ativos": ativos,
-            "assinaturas_ativas": ass_ativas,
-            "expirando_7_dias": expirando,
-            "expiradas": expiradas,
+            "total_usuarios": r_total.count or 0,
+            "usuarios_ativos": r_ativos.count or 0,
+            "assinaturas_ativas": r_ass.count or 0,
+            "expirando_7_dias": r_expir.count or 0,
+            "expiradas": r_expirada.count or 0,
         }
     except Exception as e:
         print(f"Erro resumo: {e}")

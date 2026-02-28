@@ -4,7 +4,7 @@ import threading
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-LOGS_DIR = Path(os.environ.get("LOCALAPPDATA")) / "RCC"
+LOGS_DIR = Path(os.environ.get("LOCALAPPDATA")) / "RCC" / "logs"
 LOGS_FILE = LOGS_DIR / "admin_logs.json"
 
 _MENSAGENS = {
